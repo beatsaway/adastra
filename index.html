@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>Interior</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./vendor/three.module.js"
+    }
+  }
+  </script>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect fill='%23c5ccd6' width='32' height='32'/%3E%3Ccircle cx='16' cy='16' r='8' fill='%2344aaff'/%3E%3C/svg%3E" />
+</head>
+<body>
+  <div id="loader">
+    <div class="loader-panel">
+      <h1>Loading</h1>
+      <p id="load-status">…</p>
+      <div class="bar-track">
+        <div id="load-bar" class="bar-fill"></div>
+      </div>
+      <div id="load-pct">0%</div>
+    </div>
+  </div>
+
+  <div id="overlay" class="hidden">
+    <div class="panel">
+      <h1>Systems Online</h1>
+      <button id="start-btn" type="button">Enter Ship</button>
+      <div class="keys">WASD · Mouse · Shift · E</div>
+    </div>
+  </div>
+
+  <div id="hud" class="hidden">
+    <div id="crosshair">⊹</div>
+    <div id="prompt" class="hidden">Press E</div>
+    <button id="help-btn" type="button" aria-label="Controls" title="Controls">?</button>
+    <div id="hint" class="hidden">WASD · Mouse · Shift · E</div>
+    <div id="mobile-controls" class="hidden">
+      <div id="joy-zone">
+        <div id="joy-base"><div id="joy-knob"></div></div>
+      </div>
+      <div id="look-zone"></div>
+      <button id="btn-sprint" type="button">Sprint</button>
+      <button id="btn-interact" type="button">E</button>
+    </div>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
