@@ -197,6 +197,7 @@ canvas {
   position: absolute;
   bottom: 1.15rem;
   left: 1.15rem;
+  z-index: 20;
   width: 2rem;
   height: 2rem;
   border: 1px solid rgba(40, 80, 140, 0.35);
@@ -209,6 +210,8 @@ canvas {
   line-height: 1;
   cursor: pointer;
   box-shadow: 0 2px 10px rgba(40, 60, 90, 0.12);
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
 
 #help-btn:hover {
@@ -221,6 +224,7 @@ canvas {
   position: absolute;
   bottom: 1.25rem;
   left: 3.5rem;
+  z-index: 20;
   font-family: "Orbitron", sans-serif;
   font-size: 0.72rem;
   letter-spacing: 0.06em;
@@ -231,6 +235,20 @@ canvas {
   border-radius: 4px;
   border: 1px solid rgba(40, 80, 140, 0.28);
   box-shadow: 0 2px 10px rgba(40, 60, 90, 0.1);
+}
+
+#hint.mobile-help {
+  line-height: 1.55;
+  letter-spacing: 0.03em;
+  max-width: min(72vw, 17rem);
+  padding: 0.65rem 0.85rem;
+}
+
+#hint.mobile-help strong {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
 }
 
 #hint.hidden {
@@ -342,6 +360,13 @@ canvas {
     top: 1rem;
     bottom: auto;
     left: 1rem;
+  }
+
+  #hint,
+  #hint.mobile-help {
+    top: 1rem;
+    bottom: auto;
+    left: 3.5rem;
   }
 
   #prompt {

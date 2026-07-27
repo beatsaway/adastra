@@ -158,9 +158,18 @@ async function boot() {
     : null;
 
   if (touchMode) {
-    hintEl.textContent = "Stick move · Drag look · Sprint · E";
+    hintEl.classList.add("mobile-help");
+    hintEl.innerHTML =
+      "<strong>Mobile controls</strong>" +
+      "Left stick — move<br>" +
+      "Right side — drag to look<br>" +
+      "Sprint — hold to run<br>" +
+      "E — interact";
     const keysEl = overlay.querySelector(".keys");
-    if (keysEl) keysEl.textContent = "Stick · Drag look · Sprint · E";
+    if (keysEl) {
+      keysEl.innerHTML =
+        "Left stick · Right drag look<br>Sprint · E to interact · ? for help";
+    }
   }
 
   function enter() {
@@ -171,20 +180,30 @@ async function boot() {
     if (touchMode) {
       player.setLocked(true);
       mobile?.show();
+      // show controls once so mobile players learn the layout
+      hintEl.classList.remove("hidden");
     } else {
       renderer.domElement.requestPointerLock();
     }
   }
 
   startBtn.addEventListener("click", enter);
-  helpBtn.addEventListener("click", (e) => {
+  let lastHelpToggle = 0;
+  const toggleHelp = (e) => {
+    e.preventDefault();
     e.stopPropagation();
+    const now = performance.now();
+    if (now - lastHelpToggle < 450) return;
+    lastHelpToggle = now;
     hintEl.classList.toggle("hidden");
-  });
+  };
+  helpBtn.addEventListener("pointerup", toggleHelp);
   renderer.domElement.addEventListener("click", () => {
     if (overlay.classList.contains("hidden") && loaderEl.classList.contains("hidden")) {
-      hintEl.classList.add("hidden");
-      if (!touchMode) renderer.domElement.requestPointerLock();
+      if (!touchMode) {
+        hintEl.classList.add("hidden");
+        renderer.domElement.requestPointerLock();
+      }
     }
   });
 
