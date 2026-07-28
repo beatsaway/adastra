@@ -1,0 +1,142 @@
+Three.js scene preferences
+==========================
+Learned from iterating spacecraftinside → Ad Astra (spacecraftinside2).
+For collaborators: match this taste before inventing your own look.
+
+----------------------------------------------------------------
+1. Overall look
+----------------------------------------------------------------
+- Bright white / cool grey interiors, not dark sci-fi.
+- Colour lives on accents: buttons, lights, chairs, beds, couches —
+  not on walls or big structural surfaces.
+- Clean, minimal, slightly reflective. Avoid muddy mid-greys and
+  heavy black chrome.
+- Fake deco is fine (monitors, buttons, power boxes) but it must
+  read as real furniture you could walk around — not random glow sticks.
+- Prefer simple prims (boxes, cylinders, rounded extrudes) over
+  over-detailed kits. If something looks “extra” (valve wheels on
+  pipes, vent lines, decorative frames), remove it.
+
+----------------------------------------------------------------
+2. Materials & lighting
+----------------------------------------------------------------
+- Walls: whiter, mildly reflective. Too much metalness darkens them —
+  dial reflectivity carefully and re-check in-scene.
+- Door frames / wall holes must match wall colour and feel continuous.
+  Frame should not be thicker than the wall, and corners of glass,
+  frame, and hole must agree (same roundness or none).
+- Floor patterns: neat, continuous, readable. Ugly / noisy overlays
+  get rejected. Marble / cyber / space-theme overlays are welcome
+  when they stay clean.
+- Reflectivity is room-specific (engine / washroom wetter; garden floor
+  can be shiny green-grey). Push, then pull back if it goes too dark
+  or too mirror-like.
+- Emissive accents (ring lights, neon text, plant colour pulse) should
+  be subtle. Excessive glow and GPU-heavy idle animations get cut.
+- Prefer lighter metals / chrome (sinks, taps, fridge handles) over
+  black plastic looks.
+
+----------------------------------------------------------------
+3. Shape language
+----------------------------------------------------------------
+- Rounded corners on screens, border lights, door frames, avatar limbs.
+  Avoid sharp “donut” torus lights — flatten / thin ring lights on XZ.
+- Paintings / screens / face panels: ~4:3 (heads can be 4:3 rounded
+  blocks with a soft TV-like face screen).
+- Glass doors: glass fills the opening; no classic door handles unless
+  asked. Opaque where privacy matters (washroom stall doors).
+- Furniture built from few clear pieces that read correctly in real
+  life (fridge handle on the side, coffee table = top + two edge legs,
+  sink that is actually hollow with a drain, taps that look like hotel
+  taps).
+- Capsules / pots / beds: curvy capsule forms beat stacked box walls.
+
+----------------------------------------------------------------
+4. Spatial sense (very important)
+----------------------------------------------------------------
+- Orient furniture by purpose: chair + desk face what they are for
+  (engine study → face engines; cockpit desks face the big screen).
+- If told to flip something, flip the named mesh — not the whole desk.
+- Clearances: leave walk / reach space. Don’t jam fridges, desks, or
+  sinks into walls even if the player never “uses” them.
+- Chairs must not clip walls; avatar legs must sit on the seat, not
+  float or bury into the mesh; heads must not sink into chair backs.
+- Fill staged areas deliberately (cockpit stage L/R/front) — no random
+  empty floor strips under desks.
+- Room labels should match function (Washroom if showers exist;
+  Cockpit / Diner / Engine room — use the names we settled on).
+- Layout logic over decoration: sinks near washroom entrance, cooking
+  cluster together, couches as a lounge zone, dining table with room
+  for chair backs.
+
+----------------------------------------------------------------
+5. Interaction & UX
+----------------------------------------------------------------
+- Preloader bar if first load has work to do.
+- Interact with E (desktop) / E button (mobile). Prefer toggles that
+  feel physical (stall button sinks halfway into ring, stove grey→orange
+  when on, bed capsule on/off).
+- Prompt copy: short and clear (“Press E to see outside”), not jargon.
+- UI: minimal. Hide always-on control legends behind a small “?”.
+  Small simple crosshair (⊹). Don’t yap on the start screen.
+- Typography we like: Orbitron + Share Tech Mono for UI/ship labels;
+  local script font (not Google) for diner neon if needed. Keep glow
+  restrained — same family as other ship text, not neon overload.
+- Door / ceiling labels: spaced capitals (D I N E R), above doors,
+  readable, not stretched. Prefer brand-y lines like “Ad astra”.
+- Prefer snap for some toggles (capsule off = instant hide) when
+  animation adds little.
+
+----------------------------------------------------------------
+6. Avatars & motion
+----------------------------------------------------------------
+- Blocky reference style (canuread-style): slightly rounded head /
+  torso / limbs; shorter arms; face = rounded 4:3 screen.
+- Sitting: legs ~90°, seated so mesh contacts chair correctly.
+- Idle: small head / arm motion while sitting.
+- Patrol NPCs: idle / walk / run. Random wander angles (not only 90°).
+  Prefer simple “if step blocked → pick new direction” over heavy
+  stuck-detection. Keep avoid zones non-overlapping so they don’t
+  jitter in place.
+- Colour variety across beds, chairs, couches, wardrobes — same form,
+  different tints.
+
+----------------------------------------------------------------
+7. Effects & performance
+----------------------------------------------------------------
+- Space outside window: prefer existing project reference (try3js-style
+  starfield) over inventing a new look. Slow motion, wide spread,
+  brightness variation, fade/respawn — not dense hyperspace tunnels.
+- Mobile matters. Roblox-like dual sticks (move + look). Look stick
+  should ramp: gentle near centre, faster toward the rim.
+- On mobile: cheaper materials (Lambert/Basic), fewer lights, lower
+  pixel ratio, skip far sitting/patrol/deco updates. Kill idle plant
+  CPU loops; interact-to-animate one plant is better than always-on.
+- start.bat should free the port before starting the server.
+
+----------------------------------------------------------------
+8. How to work with this owner
+----------------------------------------------------------------
+- Iterate visually in small steps. “A bit” usually means a bit —
+  don’t overshoot then thrash.
+- When something looks wrong, ask what they meant before guessing
+  (especially orientation / which mesh).
+- Family taste counts (“my sister say…”) — treat that as real feedback.
+- Prefer simpler code that fixes a class of bugs over clever special
+  cases (patrol repath rule, mobile distance skip).
+- Commit/push when asked; don’t invent scope. Keep the scene playable
+  on both desktop and phone.
+
+----------------------------------------------------------------
+Quick anti-patterns (don’t do these)
+----------------------------------------------------------------
+- Dark purple cyberpunk default look
+- Random blue floor bars / unexplained glowing strips
+- Door frames that don’t match the wall hole
+- Handles on the wrong face of objects
+- Furniture clipping walls or each other
+- Always-visible control walls of text
+- Heavy per-frame decoration animation on mobile
+- Overlapping avoid zones that trap patrol NPCs
+
+End of preferences.

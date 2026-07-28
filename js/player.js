@@ -42,7 +42,7 @@ export class Player {
     this.camera = camera;
     this.colliders = colliders;
     this.radius = 0.35;
-    this.eye = 1.65;
+    this.eye = 1.48;
     this.speed = 5.2;
     this.sprintMul = 1.75;
     this.yaw = Math.PI;

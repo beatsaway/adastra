@@ -1914,6 +1914,7 @@ function createCrewAvatar(scale = 0.44) {
   const body = extrudeRounded(0.86 * scale, 0.95 * scale, 0.56 * scale, 0.1 * scale, bodyMat);
   body.position.y = 0.1 * scale;
   group.add(body);
+  group.userData.body = body;
 
   // limbs — boxy but soft round corners (bevel so rounding shows on all edges)
   const leftArm = extrudeRoundedLimb(0.26 * scale, 0.78 * scale, 0.28 * scale, 0.08 * scale, bodyMat);
@@ -1948,11 +1949,9 @@ function seatCrewAtChair(room, x, z, rotY = 0, scale = 0.44) {
   const sitY = seatTop - bodyBottom - 0.02;
   // sit forward of backrest so the head clears it (local +Z toward console)
   const forward = 0.12;
-  av.position.set(
-    x + Math.sin(rotY) * forward,
-    sitY,
-    z + Math.cos(rotY) * forward,
-  );
+  const seatX = x + Math.sin(rotY) * forward;
+  const seatZ = z + Math.cos(rotY) * forward;
+  av.position.set(seatX, sitY, seatZ);
   av.rotation.y = rotY;
   const { head, leftLeg, rightLeg, leftArm, rightArm } = av.userData;
   // 90° sit: after -X rot, box depth becomes vertical thickness (0.3*scale)
@@ -1988,6 +1987,13 @@ function seatCrewAtChair(room, x, z, rotY = 0, scale = 0.44) {
     headTargetX: 0,
     headTargetY: 0,
     headTargetZ: 0,
+    baseRotY: rotY,
+    seatX,
+    seatZ,
+    sitY,
+    attnRadius: 2.0,
+    nearHold: 0,
+    farHold: 0,
   };
   room.add(av);
   return av;
@@ -2000,14 +2006,53 @@ export function updateSittingCrew(crew, dt, t, playerPos = null, maxDist = 26) {
   const maxD2 = maxDist * maxDist;
   for (let i = 0; i < crew.length; i++) {
     const av = crew[i];
-    if (av.userData.state !== "sitting") continue;
-    if (playerPos) {
-      av.getWorldPosition(_avWorld);
-      if (_avWorld.distanceToSquared(playerPos) > maxD2) continue;
-    }
+    const state = av.userData.state;
+    const attn = av.userData.attention;
+    const isAttnSit = state === "attention" && attn && attn.pose === "sit";
+    if (state !== "sitting" && !isAttnSit) continue;
+
     const s = av.userData.sit;
     const { head, leftArm, rightArm } = av.userData;
     if (!s || !head || !leftArm || !rightArm) continue;
+
+    av.getWorldPosition(_avWorld);
+    let dist2 = Infinity;
+    if (playerPos) dist2 = _avWorld.distanceToSquared(playerPos);
+
+    const attnR = s.attnRadius ?? 2.0;
+    const attnR2 = attnR * attnR;
+    if (playerPos) {
+      if (dist2 <= attnR2) {
+        s.farHold = 0;
+        if (isAttnSit && av.userData.attention?.releasing) {
+          av.userData.attention.releasing = false;
+          av.userData.attention.releaseT = 0;
+        }
+        // skip triggering while another NPC is already attending
+        if (state === "sitting" && !_attentionNpc) {
+          s.nearHold = (s.nearHold || 0) + dt;
+          if (s.nearHold >= ATTENTION_ENTER) enterAttention(av, "sit");
+        } else if (state === "sitting") {
+          s.nearHold = 0;
+        }
+      } else {
+        s.nearHold = 0;
+        if (isAttnSit) {
+          s.farHold = (s.farHold || 0) + dt;
+          if (s.farHold >= ATTENTION_EXIT) beginAttentionRelease(av);
+        }
+      }
+    }
+
+    const nowAttn = av.userData.state === "attention" && av.userData.attention?.pose === "sit";
+    if (playerPos && dist2 > maxD2 && !nowAttn) {
+      s.nearHold = 0;
+      continue;
+    }
+    if (nowAttn) {
+      updateAttention(av, dt, t, playerPos);
+      continue;
+    }
 
     s.nextArm -= dt;
     if (s.nextArm <= 0) {
@@ -2073,7 +2118,11 @@ export function updateSittingCrew(crew, dt, t, playerPos = null, maxDist = 26) {
 /**
  * Standing patrol avatar — idle / walk / run with random wander inside bounds.
  * Modes: av.userData.patrol.mode = "idle" | "walk" | "run"
- * State: av.userData.state = "patrol"
+ * State: av.userData.state = "patrol" | "attention" (attention.pose = "stand"|"sit")
+ *
+ * Stay within attnRadius (~2.0) for ~0.6s → attention (body/hip then head face you).
+ * Leave beyond that radius for ~0.2s, then ~0.4s smooth blend back to previous state.
+ * Only one NPC at a time: don't start attention if someone is already attending.
  *
  * @param {THREE.Object3D} room
  * @param {{
@@ -2115,6 +2164,10 @@ function spawnPatrolAvatar(room, area, scale = 0.44) {
     headTargetX: 0,
     headTargetY: 0,
     headTargetZ: 0,
+    attnRadius: 2.0,
+    nearHold: 0,
+    farHold: 0,
+    resumeMode: "idle",
   };
   head.rotation.set(0, 0, 0);
   leftArm.rotation.set(0, 0, 0);
@@ -2226,21 +2279,365 @@ function beginPatrolMove(p, av) {
   p.headTargetZ = 0;
 }
 
+const ATTENTION_ENTER = 0.6;
+const ATTENTION_EXIT = 0.2;
+const ATTENTION_BLEND_OUT = 0.4;
+
+/** At most one NPC in attention — set on enter, cleared on exit. */
+let _attentionNpc = null;
+
+/** Unified attention: pose "stand" | "sit". Stays in chair when sit. */
+function enterAttention(av, pose) {
+  if (_attentionNpc && _attentionNpc !== av) return;
+  const a = {
+    pose, // "stand" | "sit"
+    phase: Math.random() * Math.PI * 2,
+    attnNext: 0.35 + Math.random() * 0.9,
+    armL: 0,
+    armR: 0,
+    armTargetL: 0,
+    armTargetR: 0,
+    torsoX: 0,
+    torsoY: 0,
+    torsoZ: 0,
+    torsoTargetX: 0,
+    torsoTargetY: 0,
+    torsoTargetZ: 0,
+    headX: 0,
+    headY: 0,
+    headZ: 0,
+    headTargetX: 0,
+    headTargetY: 0,
+    headTargetZ: 0,
+    headFidgetX: 0,
+    headFidgetY: 0,
+    headFidgetZ: 0,
+    hipYaw: 0,
+    armBaseX: 0,
+    baseRotY: av.rotation.y,
+    seatX: av.position.x,
+    seatZ: av.position.z,
+    releasing: false,
+    releaseT: 0,
+  };
+
+  if (pose === "stand") {
+    const p = av.userData.patrol;
+    const mode = p.mode;
+    p.resumeMode = mode === "walk" || mode === "run" || mode === "idle" ? mode : "idle";
+    p.nearHold = 0;
+    p.farHold = 0;
+    a.phase = p.phase;
+    av.position.y = p.standY;
+  } else {
+    const s = av.userData.sit;
+    s.nearHold = 0;
+    s.farHold = 0;
+    a.armBaseX = s.armBaseX;
+    a.baseRotY = s.baseRotY ?? av.rotation.y;
+    a.seatX = s.seatX ?? av.position.x;
+    a.seatZ = s.seatZ ?? av.position.z;
+    a.headX = s.headX;
+    a.headY = s.headY;
+    a.headZ = s.headZ;
+    a.phase = s.armPhase;
+  }
+
+  av.userData.attention = a;
+  av.userData.state = "attention";
+  _attentionNpc = av;
+}
+
+/** Start smooth blend back to sit/patrol — same easing feel as entering. */
+function beginAttentionRelease(av) {
+  const a = av.userData.attention;
+  if (!a || a.releasing) return;
+  a.releasing = true;
+  a.releaseT = 0;
+  a.headTargetX = 0;
+  a.headTargetY = 0;
+  a.headTargetZ = 0;
+  a.headFidgetX = 0;
+  a.headFidgetY = 0;
+  a.headFidgetZ = 0;
+  a.torsoTargetX = 0;
+  a.torsoTargetY = 0;
+  a.torsoTargetZ = 0;
+  a.armTargetL = 0;
+  a.armTargetR = 0;
+}
+
+function finishExitAttention(av) {
+  const a = av.userData.attention;
+  if (!a) return;
+  const body = av.userData.body;
+  if (body) body.rotation.set(0, 0, 0);
+
+  if (a.pose === "stand") {
+    const p = av.userData.patrol;
+    av.userData.state = "patrol";
+    p.nearHold = 0;
+    p.farHold = 0;
+    p.headX = a.headX;
+    p.headY = a.headY;
+    p.headZ = a.headZ;
+    p.headTargetX = 0;
+    p.headTargetY = 0;
+    p.headTargetZ = 0;
+    const resume = p.resumeMode || "idle";
+    if (resume === "idle") {
+      p.mode = "idle";
+      p.timer = 0.8 + Math.random() * 2.2;
+    } else {
+      beginPatrolMove(p, av);
+    }
+  } else {
+    const s = av.userData.sit;
+    av.userData.state = "sitting";
+    av.rotation.y = a.baseRotY;
+    av.position.x = a.seatX;
+    av.position.z = a.seatZ;
+    s.nearHold = 0;
+    s.farHold = 0;
+    s.headX = a.headX;
+    s.headY = a.headY;
+    s.headZ = a.headZ;
+    s.headTargetX = 0;
+    s.headTargetY = 0;
+    s.headTargetZ = 0;
+    s.armL = a.armL;
+    s.armR = a.armR;
+    s.armTargetL = 0;
+    s.armTargetR = 0;
+  }
+
+  av.userData.attention = null;
+  if (_attentionNpc === av) _attentionNpc = null;
+}
+
+/**
+ * Shared attention update — pose "stand" turns whole body; pose "sit" shifts
+ * hip/torso in the chair so the head can face the player.
+ */
+function updateAttention(av, dt, t, playerPos) {
+  const a = av.userData.attention;
+  if (!a) return;
+  const { head, body, leftArm, rightArm, leftLeg, rightLeg } = av.userData;
+  const sit = a.pose === "sit";
+  const ease = Math.min(1, 5.5 * dt);
+
+  // blend out toward rest pose (mirrors the smooth enter turn)
+  if (a.releasing) {
+    a.releaseT += dt;
+    a.hipYaw += (0 - a.hipYaw) * ease;
+    a.torsoX += (0 - a.torsoX) * ease;
+    a.torsoY += (0 - a.torsoY) * ease;
+    a.torsoZ += (0 - a.torsoZ) * ease;
+    a.headX += (0 - a.headX) * ease;
+    a.headY += (0 - a.headY) * ease;
+    a.headZ += (0 - a.headZ) * ease;
+    a.armL += (0 - a.armL) * ease;
+    a.armR += (0 - a.armR) * ease;
+
+    if (sit) {
+      av.rotation.y = a.baseRotY + a.hipYaw;
+      const shift = a.hipYaw * 0.08;
+      av.position.x = a.seatX + Math.cos(a.baseRotY) * shift;
+      av.position.z = a.seatZ - Math.sin(a.baseRotY) * shift;
+      leftArm.rotation.x = a.armBaseX + a.armL;
+      rightArm.rotation.x = a.armBaseX + a.armR;
+    } else {
+      leftArm.rotation.x = a.armL;
+      rightArm.rotation.x = a.armR;
+      leftLeg.rotation.x *= Math.max(0, 1 - 10 * dt);
+      rightLeg.rotation.x *= Math.max(0, 1 - 10 * dt);
+    }
+    leftArm.rotation.z *= Math.max(0, 1 - 6 * dt);
+    rightArm.rotation.z *= Math.max(0, 1 - 6 * dt);
+    if (body) {
+      body.rotation.x = a.torsoX;
+      body.rotation.y = a.torsoY;
+      body.rotation.z = a.torsoZ;
+    }
+    head.rotation.set(a.headX, a.headY, a.headZ);
+
+    if (a.releaseT >= ATTENTION_BLEND_OUT) finishExitAttention(av);
+    return;
+  }
+
+  if (!sit) {
+    leftLeg.rotation.x *= Math.max(0, 1 - 10 * dt);
+    rightLeg.rotation.x *= Math.max(0, 1 - 10 * dt);
+    const standY = av.userData.patrol?.standY ?? av.position.y;
+    av.position.y += (standY - av.position.y) * Math.min(1, 12 * dt);
+  }
+
+  let bodyAligned = false;
+  if (playerPos) {
+    const dx = playerPos.x - _avWorld.x;
+    const dz = playerPos.z - _avWorld.z;
+    const face = Math.atan2(dx, dz);
+
+    if (sit) {
+      // stay seated: twist hips a bit + torso yaw toward player
+      let want = face - a.baseRotY;
+      while (want > Math.PI) want -= Math.PI * 2;
+      while (want < -Math.PI) want += Math.PI * 2;
+      const maxHip = 0.72;
+      const targetHip = THREE.MathUtils.clamp(want, -maxHip, maxHip);
+      a.hipYaw += (targetHip - a.hipYaw) * Math.min(1, 5.5 * dt);
+      av.rotation.y = a.baseRotY + a.hipYaw;
+      // slight ass shift sideways in the seat
+      const shift = a.hipYaw * 0.08;
+      av.position.x = a.seatX + Math.cos(a.baseRotY) * shift;
+      av.position.z = a.seatZ - Math.sin(a.baseRotY) * shift;
+
+      const remain = want - a.hipYaw;
+      a.torsoTargetY = THREE.MathUtils.clamp(remain * 0.65, -0.5, 0.5);
+      bodyAligned = Math.abs(want) < 0.95 || Math.abs(want - a.hipYaw) < 0.4;
+    } else {
+      let dyaw = face - av.rotation.y;
+      while (dyaw > Math.PI) dyaw -= Math.PI * 2;
+      while (dyaw < -Math.PI) dyaw += Math.PI * 2;
+      av.rotation.y += dyaw * Math.min(1, 7.5 * dt);
+      bodyAligned = Math.abs(dyaw) < 0.55;
+    }
+
+    let headYaw = face - av.rotation.y;
+    while (headYaw > Math.PI) headYaw -= Math.PI * 2;
+    while (headYaw < -Math.PI) headYaw += Math.PI * 2;
+
+    if (bodyAligned) {
+      const swayY = Math.sin(t * 0.85 + a.phase) * 0.06;
+      const swayX = Math.sin(t * 1.1 + a.phase * 1.4) * 0.04;
+      const swayZ = Math.sin(t * 0.7 + a.phase * 0.9) * 0.05;
+      // sit: allow a much wider head yaw so they can still face you after limited hip twist
+      const headMax = sit ? 1.25 : 0.65;
+      a.headTargetY = THREE.MathUtils.clamp(headYaw + swayY + a.headFidgetY, -headMax, headMax);
+      a.headTargetX = -0.32 + swayX + a.headFidgetX;
+      a.headTargetZ = swayZ + a.headFidgetZ;
+    } else {
+      a.headTargetY = sit ? THREE.MathUtils.clamp(headYaw * 0.85, -1.15, 1.15) : 0;
+      a.headTargetX = sit ? -0.2 : 0;
+      a.headTargetZ = 0;
+    }
+  }
+
+  a.attnNext -= dt;
+  if (a.attnNext <= 0) {
+    a.attnNext = 0.7 + Math.random() * 1.8;
+    const roll = Math.random();
+    if (roll < 0.4) {
+      a.armTargetL = (Math.random() - 0.5) * 0.55;
+      a.armTargetR = (Math.random() - 0.5) * 0.55;
+      a.torsoTargetZ = (Math.random() - 0.5) * 0.14;
+      a.torsoTargetX = (Math.random() - 0.5) * 0.08;
+      a.headFidgetX = (Math.random() - 0.5) * 0.1;
+      a.headFidgetY = (Math.random() - 0.5) * 0.18;
+      a.headFidgetZ = (Math.random() - 0.5) * 0.1;
+    } else if (roll < 0.7) {
+      a.armTargetL = -0.15 + Math.random() * 0.35;
+      a.armTargetR = -0.15 + Math.random() * 0.35;
+      a.torsoTargetZ = (Math.random() < 0.5 ? -1 : 1) * (0.06 + Math.random() * 0.1);
+      a.torsoTargetX = 0.02 + Math.random() * 0.06;
+      a.headFidgetX = -0.06 + Math.random() * 0.1;
+      a.headFidgetY = (Math.random() - 0.5) * 0.1;
+      a.headFidgetZ = (Math.random() < 0.5 ? -1 : 1) * (0.06 + Math.random() * 0.1);
+    } else {
+      a.armTargetL = 0;
+      a.armTargetR = 0;
+      a.torsoTargetX = 0;
+      a.torsoTargetZ = 0;
+      if (!sit) a.torsoTargetY = 0;
+      a.headFidgetX = 0;
+      a.headFidgetY = 0;
+      a.headFidgetZ = 0;
+    }
+  }
+
+  a.armL += (a.armTargetL - a.armL) * Math.min(1, 2.6 * dt);
+  a.armR += (a.armTargetR - a.armR) * Math.min(1, 2.6 * dt);
+  const breathe = Math.sin(t * 1.2 + a.phase) * 0.05;
+  if (sit) {
+    leftArm.rotation.x = a.armBaseX + a.armL + breathe;
+    rightArm.rotation.x = a.armBaseX + a.armR - breathe * 0.7;
+  } else {
+    leftArm.rotation.x = a.armL + breathe;
+    rightArm.rotation.x = a.armR - breathe * 0.7;
+  }
+  leftArm.rotation.z = Math.sin(t * 0.9 + a.phase) * 0.05 + a.armL * 0.2;
+  rightArm.rotation.z = -Math.sin(t * 0.95 + a.phase) * 0.05 - a.armR * 0.2;
+
+  a.torsoX += (a.torsoTargetX - a.torsoX) * Math.min(1, 2.2 * dt);
+  a.torsoY += (a.torsoTargetY - a.torsoY) * Math.min(1, 2.4 * dt);
+  a.torsoZ += (a.torsoTargetZ - a.torsoZ) * Math.min(1, 2.2 * dt);
+  if (body) {
+    body.rotation.x = a.torsoX;
+    body.rotation.y = a.torsoY;
+    body.rotation.z = a.torsoZ;
+  }
+
+  a.headX += (a.headTargetX - a.headX) * Math.min(1, 4 * dt);
+  a.headY += (a.headTargetY - a.headY) * Math.min(1, 3.5 * dt);
+  a.headZ += (a.headTargetZ - a.headZ) * Math.min(1, 3.5 * dt);
+  head.rotation.set(a.headX, a.headY, a.headZ);
+}
+
 /** Advance patrol avatars: idle fidgets, walk/run locomotion + limb gait. */
 export function updatePatrolCrew(crew, dt, t, playerPos = null, maxDist = 30) {
   if (!crew) return;
   const maxD2 = maxDist * maxDist;
   for (let i = 0; i < crew.length; i++) {
     const av = crew[i];
-    if (av.userData.state !== "patrol") continue;
-    if (playerPos) {
-      av.getWorldPosition(_avWorld);
-      if (_avWorld.distanceToSquared(playerPos) > maxD2) continue;
-    }
+    const state = av.userData.state;
+    const isAttnStand = state === "attention" && av.userData.attention?.pose === "stand";
+    if (state !== "patrol" && !isAttnStand) continue;
+
     const p = av.userData.patrol;
     const { head, leftArm, rightArm, leftLeg, rightLeg } = av.userData;
     if (!p || !head || !leftArm || !rightArm || !leftLeg || !rightLeg) continue;
     if (!p.bounds || !p.target) continue;
+
+    av.getWorldPosition(_avWorld);
+    let dist2 = Infinity;
+    if (playerPos) dist2 = _avWorld.distanceToSquared(playerPos);
+
+    const attnR = p.attnRadius ?? 2.0;
+    const attnR2 = attnR * attnR;
+
+    // near ~0.6s → attention; leave ~0.2s then smooth blend out. skip if someone already attending
+    if (playerPos) {
+      if (dist2 <= attnR2) {
+        p.farHold = 0;
+        if (isAttnStand && av.userData.attention?.releasing) {
+          av.userData.attention.releasing = false;
+          av.userData.attention.releaseT = 0;
+        }
+        if (state === "patrol" && !_attentionNpc) {
+          p.nearHold = (p.nearHold || 0) + dt;
+          if (p.nearHold >= ATTENTION_ENTER) enterAttention(av, "stand");
+        } else if (state === "patrol") {
+          p.nearHold = 0;
+        }
+      } else {
+        p.nearHold = 0;
+        if (isAttnStand) {
+          p.farHold = (p.farHold || 0) + dt;
+          if (p.farHold >= ATTENTION_EXIT) beginAttentionRelease(av);
+        }
+      }
+    }
+
+    const nowAttn = av.userData.state === "attention" && av.userData.attention?.pose === "stand";
+    if (playerPos && dist2 > maxD2 && !nowAttn) {
+      p.nearHold = 0;
+      continue;
+    }
+
+    if (nowAttn) {
+      updateAttention(av, dt, t, playerPos);
+      continue;
+    }
 
     if (p.mode === "idle") {
       leftLeg.rotation.x *= Math.max(0, 1 - 8 * dt);
