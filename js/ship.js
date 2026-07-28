@@ -3266,15 +3266,106 @@ function makeNeonSoilBorder(room, w, d, y = 0.145) {
   }
 }
 
-function makeToilet(group, x, y, z, rotY = 0) {
+function makeToilet(group, x, y, z, rotY = 0, opts = {}) {
+  const {
+    special = false,
+    interactables = null,
+    roomOx = 0,
+    roomOz = 0,
+    bankCx = 0,
+    bankCz = 0,
+    bankRotY = 0,
+  } = opts;
   const g = new THREE.Group();
   g.position.set(x, y, z);
   g.rotation.y = rotY;
   group.add(g);
   const porcelain = mat(0xd8e0ea, { roughness: 0.35, metalness: 0.2 });
+  // bowl + tank (tank stays behind the lid hinge)
   g.add(box(0.72, 0.52, 0.78, porcelain, 0, 0.38, 0.05));
-  g.add(box(0.72, 0.72, 0.26, porcelain, 0, 0.85, -0.28));
-  g.add(box(0.58, 0.06, 0.58, mat(0x88aacc, { metalness: 0.6, roughness: 0.25 }), 0, 0.66, 0.08));
+  g.add(box(0.72, 0.72, 0.26, porcelain, 0, 0.85, -0.32));
+  // seat ring (fixed)
+  g.add(box(0.58, 0.045, 0.58, mat(0x88aacc, { metalness: 0.55, roughness: 0.28 }), 0, 0.655, 0.1));
+
+  // hinged lid — pivot at back of seat, in front of tank so open lid clears porcelain
+  const lidPivot = new THREE.Group();
+  lidPivot.position.set(0, 0.70, -0.14);
+  g.add(lidPivot);
+  const lidLen = 0.54;
+  const lidZ = lidLen * 0.5; // lid extends forward (+Z) from hinge
+  const lidTop = box(0.54, 0.04, lidLen, porcelain, 0, 0.02, lidZ);
+  lidPivot.add(lidTop);
+
+  if (special) {
+    // monitor on underside of lid (−Y). When lid opens ~90°, that face looks at the user.
+    const bezel = box(0.44, 0.018, 0.36, mat(0x1e242c, { metalness: 0.4, roughness: 0.45 }), 0, -0.018, lidZ);
+    lidPivot.add(bezel);
+    const screenTex = canvasTex("toiletLidMonitor_v2", (ctx, s) => {
+      ctx.fillStyle = "#061018";
+      ctx.fillRect(0, 0, s, s);
+      ctx.fillStyle = "#0a2030";
+      ctx.fillRect(s * 0.06, s * 0.08, s * 0.88, s * 0.84);
+      ctx.strokeStyle = "rgba(80, 200, 255, 0.45)";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(s * 0.08, s * 0.1, s * 0.84, s * 0.8);
+      ctx.fillStyle = "#66e0ff";
+      ctx.font = `bold ${Math.floor(s * 0.09)}px Orbitron, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.fillText("AD ASTRA", s * 0.5, s * 0.28);
+      ctx.fillStyle = "#9ad4ff";
+      ctx.font = `${Math.floor(s * 0.055)}px Share Tech Mono, monospace`;
+      ctx.fillText("BIO WASTE · OK", s * 0.5, s * 0.42);
+      ctx.fillText("PRESSURE 1.02", s * 0.5, s * 0.52);
+      ctx.fillText("H2O CYCLE · NOM", s * 0.5, s * 0.62);
+      for (let i = 0; i < 5; i++) {
+        const yy = s * (0.7 + i * 0.045);
+        ctx.fillStyle = i % 2 ? "rgba(60,180,255,0.35)" : "rgba(40,120,180,0.25)";
+        ctx.fillRect(s * 0.14, yy, s * (0.3 + (i * 17) % 40 / 100), s * 0.028);
+      }
+    }, 256);
+    screenTex.wrapS = screenTex.wrapT = THREE.ClampToEdgeWrapping;
+    const screenMat = new THREE.MeshStandardMaterial({
+      map: screenTex,
+      emissive: 0x336688,
+      emissiveMap: screenTex,
+      emissiveIntensity: 1.05,
+      roughness: 0.3,
+      metalness: 0.08,
+    });
+    // proud of the lid underside so it reads as a panel, not sunk into the bowl
+    const screen = box(0.38, 0.014, 0.30, screenMat, 0, -0.032, lidZ);
+    lidPivot.add(screen);
+
+    if (interactables) {
+      const cos = Math.cos(bankRotY);
+      const sin = Math.sin(bankRotY);
+      const wx = roomOx + bankCx + cos * x - sin * z;
+      const wz = roomOz + bankCz + sin * x + cos * z;
+      interactables.push({
+        kind: "toiletLid",
+        label: "Toilet lid",
+        open: false,
+        amount: 0,
+        target: 0,
+        lidPivot,
+        closedRotX: 0,
+        // ~95° — upright facing you; past this the lid/monitor clip into the tank
+        openRotX: -Math.PI * 0.52,
+        position: new THREE.Vector3(wx, 0.75, wz),
+        radius: 0.95,
+        prompt() {
+          return this.open
+            ? "Press E · Close lid"
+            : "Press E · Open lid";
+        },
+        toggle() {
+          this.open = !this.open;
+          this.target = this.open ? 1 : 0;
+        },
+      });
+    }
+  }
+
   return g;
 }
 
@@ -3435,7 +3526,7 @@ function makeRisingStallGate(g, colliders, interactables, roomOx, roomOz, bankCx
     closedMin: cmin.clone(),
     closedMax: cmax.clone(),
     position: new THREE.Vector3(btnWpos.x, btnY, btnWpos.z),
-    radius: 1.15,
+    radius: 0.62,
     button: btn,
     btnOutX,
     btnInX,
@@ -3505,7 +3596,17 @@ function makeStallBank(room, colliders, interactables, roomOx, roomOz, {
   for (let i = 0; i < count; i++) {
     const slotX = -totalW * 0.5 + stallW * (i + 0.5);
     if (kind === "toilet") {
-      makeToilet(g, slotX, 0, -depth * 0.22, 0);
+      // i=0 is the far/east corner stall (innermost) on the washroom bank
+      const special = i === 0;
+      makeToilet(g, slotX, 0, -depth * 0.22, 0, {
+        special,
+        interactables,
+        roomOx,
+        roomOz,
+        bankCx: cx,
+        bankCz: cz,
+        bankRotY: rotY,
+      });
       makeLooRoll(g, slotX + stallW * 0.5 - 0.03, 0.95, -depth * 0.08);
     } else {
       makeShowerFixtures(g, slotX, 0, 0, 0);
@@ -3531,6 +3632,15 @@ export function updateStallDoors(interactables, dt) {
   for (let i = 0; i < interactables.length; i++) {
     const d = interactables[i];
     if (d.kind === "bedShield") continue; // snap toggle — no tween
+    if (d.kind === "toiletLid") {
+      d.amount += (d.target - d.amount) * Math.min(1, 3.8 * dt);
+      if (d.amount < 0.001) d.amount = 0;
+      if (d.amount > 0.999) d.amount = 1;
+      if (d.lidPivot) {
+        d.lidPivot.rotation.x = d.closedRotX + (d.openRotX - d.closedRotX) * d.amount;
+      }
+      continue;
+    }
     if (d.kind !== "stallDoor") continue;
     d.amount += (d.target - d.amount) * Math.min(1, speed * dt);
     if (d.amount < 0.001) d.amount = 0;
@@ -3581,7 +3691,7 @@ function decorateWallMonitors(room, anim, spots) {
 
 /** Shared glow text — sized to content; returns tex + aspect (no stretch). */
 function makeGlowTextTexture(
-  text = "L U A C",
+  text = "Ad astra",
   fontPx = 128,
   fontFamily = '"Orbitron", sans-serif',
   fontWeight = "700",
@@ -3615,11 +3725,7 @@ function makeGlowTextTexture(
   return { tex, aspect: c.width / Math.max(1, c.height) };
 }
 
-function makeLuacTextTexture() {
-  return makeGlowTextTexture("L U A C", 128);
-}
-
-function makeLuacMaterial(tex) {
+function makeGlowTextMaterial(tex) {
   return new THREE.MeshBasicMaterial({
     map: tex,
     transparent: true,
@@ -3637,7 +3743,7 @@ function makeWallGlowText(room, {
   const { tex, aspect } = makeGlowTextTexture(text, fontPx);
   const plane = new THREE.Mesh(
     new THREE.PlaneGeometry(h * aspect, h),
-    makeLuacMaterial(tex),
+    makeGlowTextMaterial(tex),
   );
   plane.position.set(x, y, z);
   plane.rotation.y = rotY;
@@ -3682,13 +3788,13 @@ function makeDoorOverLabel(room, side, text, size = {}) {
 }
 
 /** Bold Orbitron ceiling brand. */
-function makeControlCeilingLuac(room) {
+function makeControlCeilingBrand(room) {
   const h = room.userData.dims?.h ?? 5;
   const { tex, aspect } = makeGlowTextTexture("Ad astra", 200);
   const planeH = 4.4;
   const plane = new THREE.Mesh(
     new THREE.PlaneGeometry(planeH * aspect, planeH),
-    makeLuacMaterial(tex),
+    makeGlowTextMaterial(tex),
   );
   plane.rotation.x = Math.PI / 2;
   plane.rotation.z = Math.PI;
@@ -3709,7 +3815,7 @@ function makeDeliciousNeon(room, _anim, x = -2.6, y = 2.7, z = -5.12) {
   const planeH = 4.4;
   const plane = new THREE.Mesh(
     new THREE.PlaneGeometry(planeH * aspect, planeH),
-    makeLuacMaterial(tex),
+    makeGlowTextMaterial(tex),
   );
   plane.position.set(x, y, z);
   plane.rotation.y = 0;
@@ -4180,7 +4286,7 @@ export function buildShip(scene) {
       control.add(cyl(0.04, 0.04, 0.03, led, bx + bw * 0.32, 2.55, bz + bd * 0.5 + 0.04, 12));
     }
   }
-  makeControlCeilingLuac(control);
+  makeControlCeilingBrand(control);
   styleRoomLighting(control, "control");
   // keep walkable area short of the main screen
   blockZone(colliders, 15, 3.2, 1.2, 0, 1.5, 3.5, 0, 22);
