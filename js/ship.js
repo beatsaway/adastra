@@ -545,6 +545,51 @@ function patternStallPanel(ctx, s) {
   }
 }
 
+/** Soft Carrara-style marble for wash sinks (slightly warm grey) */
+function patternSinkMarble(ctx, s) {
+  ctx.fillStyle = "#e8e4de";
+  ctx.fillRect(0, 0, s, s);
+  for (let i = 0; i < 48; i++) {
+    const x = (Math.sin(i * 19.17) * 0.5 + 0.5) * s;
+    const y = (Math.cos(i * 41.3) * 0.5 + 0.5) * s;
+    const r = 10 + (i % 9) * 2.5;
+    ctx.fillStyle = i % 3 === 0 ? "rgba(214, 208, 200, 0.55)" : "rgba(232, 226, 218, 0.45)";
+    ctx.beginPath();
+    ctx.ellipse(x, y, r * 1.8, r * 0.9, i * 0.35, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const veins = [
+    { c: "rgba(138, 142, 150, 0.48)", w: 2.2, pts: [[0, 0.2], [0.3, 0.32], [0.55, 0.26], [0.85, 0.4], [1, 0.36]] },
+    { c: "rgba(152, 154, 160, 0.4)", w: 1.6, pts: [[0, 0.62], [0.28, 0.55], [0.6, 0.68], [1, 0.58]] },
+    { c: "rgba(130, 134, 142, 0.38)", w: 1.8, pts: [[0.15, 0], [0.22, 0.4], [0.18, 0.75], [0.35, 1]] },
+    { c: "rgba(158, 152, 146, 0.35)", w: 1.4, pts: [[0.5, 0], [0.62, 0.35], [0.58, 0.7], [0.78, 1]] },
+    { c: "rgba(142, 146, 152, 0.32)", w: 1.3, pts: [[0, 0.88], [0.4, 0.82], [0.75, 0.92], [1, 0.85]] },
+  ];
+  for (const v of veins) {
+    ctx.strokeStyle = v.c;
+    ctx.lineWidth = v.w;
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    v.pts.forEach(([px, py], i) => {
+      const x = px * s;
+      const y = py * s;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  }
+  ctx.strokeStyle = "rgba(150, 146, 140, 0.26)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 10; i++) {
+    const y0 = ((i * 29) % 100) / 100 * s;
+    ctx.beginPath();
+    ctx.moveTo(0, y0);
+    ctx.quadraticCurveTo(s * 0.4, y0 + (i % 2 ? 12 : -10), s * 0.75, y0 + (i % 3 ? -8 : 10));
+    ctx.lineTo(s, y0 + 4);
+    ctx.stroke();
+  }
+}
+
 function patternDiagonalMetal(ctx, s) {
   // denser abrasive / non-slip metal — mid grey plate with clearer grit overlay
   ctx.fillStyle = "#7a828c";
@@ -905,6 +950,26 @@ function extrudeRounded(w, h, depth, radius, material) {
     curveSegments: 10,
   });
   geo.translate(0, 0, -depth * 0.5);
+  const mesh = new THREE.Mesh(geo, material);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+/** Rounded box with soft bevels — better for avatar limbs. */
+function extrudeRoundedLimb(w, h, depth, radius, material) {
+  const r = Math.min(radius, w * 0.45, h * 0.45);
+  const bevel = Math.min(0.028, r * 0.4, depth * 0.22);
+  const geo = new THREE.ExtrudeGeometry(roundedRectShape(w, h, r), {
+    depth: Math.max(0.02, depth - bevel * 2),
+    bevelEnabled: true,
+    bevelThickness: bevel,
+    bevelSize: bevel,
+    bevelSegments: 3,
+    curveSegments: 10,
+  });
+  geo.translate(0, 0, -depth * 0.5);
+  geo.computeVertexNormals();
   const mesh = new THREE.Mesh(geo, material);
   mesh.castShadow = true;
   mesh.receiveShadow = true;
@@ -1819,15 +1884,19 @@ function createCrewAvatar(scale = 0.44) {
   const bodyMat = new THREE.MeshStandardMaterial({ color: outfit, roughness: 0.78, metalness: 0.08 });
   const legMat = new THREE.MeshStandardMaterial({ color: pants, roughness: 0.82, metalness: 0.06 });
 
-  const head = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), headMat);
+  // 4:3 CRT-style head (wider than tall), soft round corners
+  const head = extrudeRounded(1.2, 0.9, 1, 0.12, headMat);
   head.position.y = 0.95 * scale;
   head.scale.setScalar(scale);
   group.add(head);
 
-  // smaller square "TV" face on the front (+Z) — no bezel
+  // matching 4:3 screen with soft round corners (+Z)
   const faceGlow = new THREE.Color().setHSL(Math.random(), 0.85, 0.45);
-  const faceScreen = new THREE.Mesh(
-    new THREE.BoxGeometry(0.58, 0.58, 0.04),
+  const faceScreen = extrudeRounded(
+    0.72,
+    0.54,
+    0.07,
+    0.08,
     new THREE.MeshStandardMaterial({
       color: 0x081018,
       emissive: faceGlow,
@@ -1836,29 +1905,29 @@ function createCrewAvatar(scale = 0.44) {
       metalness: 0.08,
     }),
   );
-  faceScreen.position.z = 0.52;
+  faceScreen.position.z = 0.5;
+  faceScreen.castShadow = false;
+  faceScreen.receiveShadow = false;
   head.add(faceScreen);
   group.userData.faceScreen = faceScreen;
 
-  const body = new THREE.Mesh(
-    new THREE.BoxGeometry(0.86 * scale, 0.95 * scale, 0.56 * scale),
-    bodyMat,
-  );
+  const body = extrudeRounded(0.86 * scale, 0.95 * scale, 0.56 * scale, 0.1 * scale, bodyMat);
   body.position.y = 0.1 * scale;
   group.add(body);
 
-  const armGeom = new THREE.BoxGeometry(0.26 * scale, 0.92 * scale, 0.28 * scale);
-  const leftArm = new THREE.Mesh(armGeom, bodyMat);
-  const rightArm = new THREE.Mesh(armGeom, bodyMat);
-  leftArm.position.set(-0.58 * scale, 0.06 * scale, 0);
-  rightArm.position.set(0.58 * scale, 0.06 * scale, 0);
+  // limbs — boxy but soft round corners (bevel so rounding shows on all edges)
+  const leftArm = extrudeRoundedLimb(0.26 * scale, 0.78 * scale, 0.28 * scale, 0.08 * scale, bodyMat);
+  const rightArm = leftArm.clone();
+  rightArm.material = bodyMat;
+  leftArm.position.set(-0.58 * scale, 0.1 * scale, 0);
+  rightArm.position.set(0.58 * scale, 0.1 * scale, 0);
   group.add(leftArm, rightArm);
 
-  const legGeom = new THREE.BoxGeometry(0.3 * scale, 0.56 * scale, 0.3 * scale);
-  const leftLeg = new THREE.Mesh(legGeom, legMat);
-  const rightLeg = new THREE.Mesh(legGeom, legMat);
-  leftLeg.position.set(-0.2 * scale, -0.72 * scale, 0);
-  rightLeg.position.set(0.2 * scale, -0.72 * scale, 0);
+  const leftLeg = extrudeRoundedLimb(0.3 * scale, 0.66 * scale, 0.3 * scale, 0.12 * scale, legMat);
+  const rightLeg = leftLeg.clone();
+  rightLeg.material = legMat;
+  leftLeg.position.set(-0.2 * scale, -0.67 * scale, 0);
+  rightLeg.position.set(0.2 * scale, -0.67 * scale, 0);
   group.add(leftLeg, rightLeg);
 
   group.userData.head = head;
@@ -2376,20 +2445,28 @@ function makeTable(group, x, y, z, w = 1.4, d = 0.8) {
   return g;
 }
 
-/** Wall-mounted wide sink — no pedestal; 2 taps; open hollow basin */
-function makeWashSink(group, x, y, z, rotY = 0) {
+/** Wall-mounted sink — marble basin + taps. Width along local Z; taps on +X. */
+function makeWashSink(group, x, y, z, rotY = 0, {
+  width = 3.35,
+  taps = 4,
+  depthX = 0.7,
+} = {}) {
   const g = new THREE.Group();
   g.position.set(x, y, z);
   g.rotation.y = rotY;
   group.add(g);
 
-  const ceramic = mat(0xe4e8ec, { metalness: 0.55, roughness: 0.12 });
-  const chrome = mat(0xe8ecef, { metalness: 0.88, roughness: 0.12 });
-  const drain = mat(0x3a3e42, { metalness: 0.5, roughness: 0.35 });
+  const marbleTex = canvasTex("sinkMarble_v2", patternSinkMarble, 256);
+  const ceramic = patternedMat(0xe2ddd6, marbleTex, 1.4, 1.8, {
+    metalness: 0.08,
+    roughness: 0.32,
+  });
+  const tapMarble = patternedMat(0xe8e4dc, marbleTex, 0.4, 0.55, {
+    metalness: 0.78,
+    roughness: 0.16,
+  });
+  const drain = mat(0x8a9096, { metalness: 0.55, roughness: 0.32 });
 
-  // twice as wide (along Z); open top
-  const width = 1.44;
-  const depthX = 0.7;
   const wall = 0.045;
   const depth = 0.2;
   const rimY = 1.05;
@@ -2397,20 +2474,24 @@ function makeWashSink(group, x, y, z, rotY = 0) {
   const innerW = width - wall * 2;
   const innerD = depthX - wall * 2;
 
-  // basin floor
   g.add(box(innerD, 0.035, innerW, ceramic, 0, floorY + 0.017, 0));
-  // two drain holes
-  for (const dz of [-0.32, 0.32]) {
-    g.add(cyl(0.05, 0.05, 0.02, drain, 0, floorY + 0.04, dz, 24));
-    g.add(cyl(0.025, 0.025, 0.022, mat(0x2a2c2e, { metalness: 0.4, roughness: 0.45 }), 0, floorY + 0.042, dz, 20));
+
+  const span = innerW * 0.78;
+  const stations = [];
+  for (let i = 0; i < taps; i++) {
+    const t = taps <= 1 ? 0.5 : i / (taps - 1);
+    stations.push(-span * 0.5 + t * span);
   }
-  // 4 walls
+  for (const dz of stations) {
+    g.add(cyl(0.05, 0.05, 0.02, drain, 0, floorY + 0.04, dz, 24));
+    g.add(cyl(0.025, 0.025, 0.022, mat(0x6a7076, { metalness: 0.45, roughness: 0.4 }), 0, floorY + 0.042, dz, 20));
+  }
+
   const wy = floorY + depth * 0.5;
   g.add(box(depthX, depth, wall, ceramic, 0, wy, -width * 0.5 + wall * 0.5));
   g.add(box(depthX, depth, wall, ceramic, 0, wy, width * 0.5 - wall * 0.5));
   g.add(box(wall, depth, innerW, ceramic, -depthX * 0.5 + wall * 0.5, wy, 0));
   g.add(box(wall, depth, innerW, ceramic, depthX * 0.5 - wall * 0.5, wy, 0));
-  // rim lip
   const rimH = 0.03;
   const rimT = 0.055;
   g.add(box(depthX + 0.04, rimH, rimT, ceramic, 0, rimY + rimH * 0.5, -width * 0.5));
@@ -2418,35 +2499,26 @@ function makeWashSink(group, x, y, z, rotY = 0) {
   g.add(box(rimT, rimH, width + 0.04, ceramic, -depthX * 0.5, rimY + rimH * 0.5, 0));
   g.add(box(rimT, rimH, width + 0.04, ceramic, depthX * 0.5, rimY + rimH * 0.5, 0));
 
-  // thin wall brackets (no floor column)
-  const bracket = mat(0xd8dee6, { metalness: 0.35, roughness: 0.35 });
-  for (const dz of [-0.45, 0.45]) {
+  const bracket = mat(0xd8d4ce, { metalness: 0.28, roughness: 0.42 });
+  const bracketSpan = width * 0.7;
+  const bracketN = Math.max(2, taps);
+  for (let i = 0; i < bracketN; i++) {
+    const t = bracketN <= 1 ? 0.5 : i / (bracketN - 1);
+    const dz = -bracketSpan * 0.5 + t * bracketSpan;
     g.add(box(0.12, 0.04, 0.08, bracket, depthX * 0.35, floorY - 0.04, dz));
   }
 
-  // two T-taps with flat hotel spouts + hot/cold knobs
   const tx = depthX * 0.5 - wall * 0.5;
-  const tapBaseY = rimY;
-  const hotMat = mat(0xe04848, { metalness: 0.55, roughness: 0.28 });
-  const coldMat = mat(0x4488e0, { metalness: 0.55, roughness: 0.28 });
-  function addKnob(kx, ky, kz, knobMat) {
-    g.add(cyl(0.012, 0.012, 0.035, chrome, kx, ky, kz, 10));
-    g.add(cyl(0.034, 0.034, 0.028, knobMat, kx, ky + 0.02, kz, 16));
-    g.add(cyl(0.012, 0.012, 0.02, chrome, kx, ky + 0.038, kz, 8));
+  const tapBaseY = rimY + 0.03;
+  for (const tz of stations) {
+    // longer supporting flat tip below the column
+    g.add(box(0.44, 0.022, 0.13, tapMarble, tx - 0.16, tapBaseY + 0.012, tz));
+    // short column on that lower platform
+    g.add(cyl(0.048, 0.048, 0.035, tapMarble, tx, tapBaseY + 0.04, tz, 16));
+    g.add(box(0.055, 0.055, 0.055, tapMarble, tx, tapBaseY + 0.075, tz));
+    // shorter top flat tip extending into the basin
+    g.add(box(0.32, 0.022, 0.11, tapMarble, tx - 0.13, tapBaseY + 0.108, tz));
   }
-  function addTap(tz) {
-    g.add(cyl(0.028, 0.028, 0.045, chrome, tx, tapBaseY + 0.022, tz, 12));
-    g.add(cyl(0.02, 0.02, 0.1, chrome, tx, tapBaseY + 0.09, tz, 12));
-    const cross = cyl(0.018, 0.018, 0.14, chrome, tx, tapBaseY + 0.13, tz, 12);
-    cross.rotation.x = Math.PI / 2;
-    g.add(cross);
-    g.add(box(0.14, 0.016, 0.07, chrome, tx - 0.08, tapBaseY + 0.13, tz));
-    // hot (red) / cold (blue) on either side of the spout
-    addKnob(tx - 0.01, tapBaseY + 0.02, tz - 0.14, hotMat);
-    addKnob(tx - 0.01, tapBaseY + 0.02, tz + 0.14, coldMat);
-  }
-  addTap(-0.32);
-  addTap(0.32);
   return g;
 }
 
@@ -2815,25 +2887,24 @@ function makeShowerFixtures(group, x, y, z, rotY = 0) {
   group.add(g);
   // floor drain
   g.add(cyl(0.18, 0.18, 0.03, mat(0x6a7480, { metalness: 0.7, roughness: 0.3 }), 0, 0.02, 0.1, 16));
-  // wall pipe + head (toward back of stall = local -Z)
-  g.add(cyl(0.035, 0.035, 2.8, mat(METAL, { metalness: 0.75, roughness: 0.25 }), 0, 2.1, -0.55, 8));
+  // wall pipe + head — pole lower end touches the control circle
+  const dialY = 1.1;
+  const dialR = 0.078;
+  const poleBot = dialY + dialR;
+  const poleTop = 3.45;
+  const poleH = poleTop - poleBot;
+  g.add(cyl(0.035, 0.035, poleH, mat(METAL, { metalness: 0.75, roughness: 0.25 }), 0, (poleBot + poleTop) * 0.5, -0.48, 8));
   const head = cyl(0.12, 0.08, 0.08, mat(METAL, { metalness: 0.8, roughness: 0.2 }), 0, 3.45, -0.35, 12);
   head.rotation.x = Math.PI / 2;
   g.add(head);
-  g.add(box(0.55, 0.08, 0.12, mat(0xb8c4d0, { metalness: 0.5, roughness: 0.35 }), 0, 1.1, -0.58));
-  // hot / cold control knobs on the shower panel
-  const chrome = mat(0xe8ecef, { metalness: 0.88, roughness: 0.12 });
-  const hotMat = mat(0xe04848, { metalness: 0.55, roughness: 0.28 });
-  const coldMat = mat(0x4488e0, { metalness: 0.55, roughness: 0.28 });
-  for (const [kx, knobMat] of [[-0.16, hotMat], [0.16, coldMat]]) {
-    g.add(cyl(0.015, 0.015, 0.05, chrome, kx, 1.1, -0.5, 10));
-    const knob = cyl(0.05, 0.05, 0.04, knobMat, kx, 1.1, -0.46, 18);
-    knob.rotation.x = Math.PI / 2;
-    g.add(knob);
-    const tip = cyl(0.016, 0.016, 0.025, chrome, kx, 1.1, -0.43, 8);
-    tip.rotation.x = Math.PI / 2;
-    g.add(tip);
-  }
+  // old-school pull: small round face + large flat handle pointing down
+  const chrome = mat(0xf2f4f6, { metalness: 0.92, roughness: 0.1 });
+  g.add(cyl(0.03, 0.03, 0.07, chrome, 0, dialY, -0.52, 12));
+  const dial = cyl(dialR, dialR, 0.028, chrome, 0, dialY, -0.455, 28);
+  dial.rotation.x = Math.PI / 2;
+  g.add(dial);
+  // wide flat pull handle hanging below the circle
+  g.add(box(0.09, 0.22, 0.014, chrome, 0, dialY - 0.14, -0.425));
   return g;
 }
 
@@ -3615,12 +3686,12 @@ export function buildShip(scene) {
   });
   zones.push(control.userData);
 
-  // clean white minimal bridge stage + one step (long enough for chairs)
+  // clean white minimal bridge stage + one step — fill to side + front walls
   const stageH = 0.27;
-  const stageW = 12.8;
+  const stageW = 15.45;
   const white = mat(0xffffff, { metalness: 0.14, roughness: 0.3 });
   const stageFront = -0.65;
-  const stageBack = 3.85;
+  const stageBack = 4.72;
   const stageDepth = stageBack - stageFront;
   control.add(box(
     stageW, stageH, stageDepth, white,
@@ -3671,11 +3742,6 @@ export function buildShip(scene) {
   }
   makeBigScreen(control, anim, -7.5, 2.1, 2.2, 2.0, 1.4, Math.PI / 2);
   makeBigScreen(control, anim, 7.5, 2.1, 2.2, 2.0, 1.4, -Math.PI / 2);
-  // rear side walls — same monitor panels (replaces old paintings)
-  decorateWallMonitors(control, anim, [
-    [-7.5, 2.1, -2.2, Math.PI / 2],
-    [7.5, 2.1, -2.2, -Math.PI / 2],
-  ]);
   // flat wall power boxes on each side of the south door
   {
     const boxBody = mat(0xeef2f6, { metalness: 0.4, roughness: 0.28 });
@@ -3905,8 +3971,8 @@ export function buildShip(scene) {
     label: "Crew Quarters",
   });
   zones.push(crew.userData);
-  // 10 beds along N/S walls — spaced for capsule pods
-  const bedXs = [-5.8, -3.2, -0.6, 2.0, 4.6];
+  // 12 beds along N/S walls — spaced for capsule pods
+  const bedXs = [-6.1, -3.8, -1.5, 0.8, 3.1, 5.4];
   const bedTones = [
     { frame: 0xb8c4b4, mattress: 0xc8d4c4, pillow: 0xe8eee4, glass: 0xc8e8d0, glow: 0x66e0a0, wardrobe: 0xa8c4b0 },
     { frame: 0xb0b8c8, mattress: 0x7a9ec8, pillow: 0xd8e8f8, glass: 0xa8d0f0, glow: 0x44aaff, wardrobe: 0x8aa4c4 },
@@ -3918,11 +3984,13 @@ export function buildShip(scene) {
     { frame: 0xc4a8b0, mattress: 0xb85a7a, pillow: 0xf0dce4, glass: 0xf0b0c8, glow: 0xff66aa, wardrobe: 0xc090a0 },
     { frame: 0xb0c0c8, mattress: 0x6a82b8, pillow: 0xdce4f4, glass: 0xb0c8f0, glow: 0x6688ff, wardrobe: 0x90a0c0 },
     { frame: 0xc0b8b0, mattress: 0xc89060, pillow: 0xf0e4d4, glass: 0xf0d0b0, glow: 0xff9944, wardrobe: 0xc0a090 },
+    { frame: 0xb4c0b8, mattress: 0x78b898, pillow: 0xe4f2ea, glass: 0xb0e0c8, glow: 0x55ddaa, wardrobe: 0x90b8a8 },
+    { frame: 0xc0b4c4, mattress: 0xa070b0, pillow: 0xeee4f4, glass: 0xd8c0f0, glow: 0xbb66ee, wardrobe: 0xa890b8 },
   ];
   bedXs.forEach((bx, i) => {
     // bunks closer to the N/S walls
     makeBed(crew, bx, 0, 4.15, Math.PI, bedTones[i], interactables, crew.position.x, crew.position.z);
-    makeBed(crew, bx, 0, -4.15, 0, bedTones[i + 5], interactables, crew.position.x, crew.position.z);
+    makeBed(crew, bx, 0, -4.15, 0, bedTones[i + 6], interactables, crew.position.x, crew.position.z);
   });
   // bluish fake-data wall monitor on the far (west) end
   decorateWallMonitors(crew, anim, [
@@ -3968,16 +4036,17 @@ export function buildShip(scene) {
     kind: "shower",
   });
 
-  // sinks + mirrors flush to the west wall (flanking the door)
+  // one long 4-tap sink on the south wall, west of the shower bank
+  const sinkW = 3.85;
+  const sinkX = -4.05;
+  const sinkZ = -3.72;
+  makeWashSink(toilets, sinkX, 0, sinkZ, Math.PI / 2, { width: sinkW, taps: 4 });
   const mirrorGlass = mat(0x88aacc, {
     metalness: 0.85, roughness: 0.1, emissive: 0x223344, emissiveIntensity: 0.16,
   });
   const mirrorFrame = mat(0xb8c0c8, { metalness: 0.65, roughness: 0.28 });
-  for (const sz of [-2.55, 2.55]) {
-    toilets.add(box(0.04, 1.05, 1.55, mirrorFrame, -6.28, 1.95, sz));
-    toilets.add(box(0.03, 0.95, 1.4, mirrorGlass, -6.25, 1.95, sz));
-    makeWashSink(toilets, -5.95, 0, sz, Math.PI);
-  }
+  toilets.add(box(sinkW * 0.92, 1.05, 0.04, mirrorFrame, sinkX, 1.95, -4.28));
+  toilets.add(box(sinkW * 0.86, 0.95, 0.03, mirrorGlass, sinkX, 1.95, -4.25));
   styleRoomLighting(toilets, "hygiene");
 
   // —— ENGINE APPROACH ——
