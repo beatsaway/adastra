@@ -83,7 +83,7 @@ export class Player {
 
     // right virtual stick — continuous look
     if (this.lookStickX || this.lookStickY) {
-      const lookRate = 2.6;
+      const lookRate = 4.4;
       this.look(this.lookStickX * lookRate * 60 * dt, this.lookStickY * lookRate * 60 * dt);
     }
 
