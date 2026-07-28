@@ -1,8 +1,5 @@
 Three.js scene preferences
 ==========================
-Learned from iterating spacecraftinside → Ad Astra (spacecraftinside2).
-For collaborators: match this taste before inventing your own look.
-
 ----------------------------------------------------------------
 1. Overall look
 ----------------------------------------------------------------
