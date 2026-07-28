@@ -16,6 +16,8 @@ For collaborators: match this taste before inventing your own look.
 - Prefer simple prims (boxes, cylinders, rounded extrudes) over
   over-detailed kits. If something looks “extra” (valve wheels on
   pipes, vent lines, decorative frames), remove it.
+- Brand is Ad Astra. Never use “LUAC” (or similar leftover names) in
+  copy, textures, function names, or comments.
 
 ----------------------------------------------------------------
 2. Materials & lighting
@@ -49,7 +51,13 @@ For collaborators: match this taste before inventing your own look.
   life (fridge handle on the side, coffee table = top + two edge legs,
   sink that is actually hollow with a drain, taps that look like hotel
   taps).
+- Multi-piece fixtures (shower pole, dial, neck, head) must touch each
+  other — no floating gaps between connected meshes. Mount wall taps
+  flush against the wall.
 - Capsules / pots / beds: curvy capsule forms beat stacked box walls.
+- Hinged lids / doors: open angle must clear other meshes (don’t swing
+  a toilet lid monitor into the tank). Underside details face the user
+  when open.
 
 ----------------------------------------------------------------
 4. Spatial sense (very important)
@@ -59,6 +67,8 @@ For collaborators: match this taste before inventing your own look.
 - If told to flip something, flip the named mesh — not the whole desk.
 - Clearances: leave walk / reach space. Don’t jam fridges, desks, or
   sinks into walls even if the player never “uses” them.
+- Stall banks / built-in rows hug their wall; don’t leave a big useless
+  gap behind toilets or showers.
 - Chairs must not clip walls; avatar legs must sit on the seat, not
   float or bury into the mesh; heads must not sink into chair backs.
 - Fill staged areas deliberately (cockpit stage L/R/front) — no random
@@ -75,7 +85,9 @@ For collaborators: match this taste before inventing your own look.
 - Preloader bar if first load has work to do.
 - Interact with E (desktop) / E button (mobile). Prefer toggles that
   feel physical (stall button sinks halfway into ring, stove grey→orange
-  when on, bed capsule on/off).
+  when on, bed capsule on/off, toilet lid open/close).
+- Keep interact radii tight for stall doors / small fixtures — player
+  should be close, not triggering from the aisle.
 - Prompt copy: short and clear (“Press E to see outside”), not jargon.
 - UI: minimal. Hide always-on control legends behind a small “?”.
   Small simple crosshair (⊹). Don’t yap on the start screen.
@@ -85,7 +97,10 @@ For collaborators: match this taste before inventing your own look.
 - Door / ceiling labels: spaced capitals (D I N E R), above doors,
   readable, not stretched. Prefer brand-y lines like “Ad astra”.
 - Prefer snap for some toggles (capsule off = instant hide) when
-  animation adds little.
+  animation adds little; for pose changes (attention enter/exit),
+  ease both ways — don’t snap only on the way out.
+- Camera eye height a bit lower than default FPS (~1.48) so crew
+  avatars don’t read as tiny.
 
 ----------------------------------------------------------------
 6. Avatars & motion
@@ -98,6 +113,14 @@ For collaborators: match this taste before inventing your own look.
   Prefer simple “if step blocked → pick new direction” over heavy
   stuck-detection. Keep avoid zones non-overlapping so they don’t
   jitter in place.
+- Attention (unified state, pose "stand" | "sit"):
+  - Trigger when player stays in a short radius (~1.7m) for ~0.3s.
+  - Leave after ~0.3s out of range, then smooth blend back.
+  - Stand: turn body toward player, head looks up a bit + subtle fidget.
+  - Sit: stay in chair; hip/torso twist + ass shift so head can face you.
+  - Only one NPC in attention at a time — don’t start another while
+    someone is already attending (simple flag; don’t over-engineer
+    “closest NPC” systems unless asked).
 - Colour variety across beds, chairs, couches, wardrobes — same form,
   different tints.
 
@@ -117,13 +140,14 @@ For collaborators: match this taste before inventing your own look.
 ----------------------------------------------------------------
 8. How to work with this owner
 ----------------------------------------------------------------
-- Iterate visually in small steps. “A bit” usually means a bit —
-  don’t overshoot then thrash.
+- Iterate visually in small steps. “A bit” / “just a bit” usually means
+  a small nudge — don’t overshoot then thrash.
 - When something looks wrong, ask what they meant before guessing
   (especially orientation / which mesh).
 - Family taste counts (“my sister say…”) — treat that as real feedback.
 - Prefer simpler code that fixes a class of bugs over clever special
-  cases (patrol repath rule, mobile distance skip).
+  cases (patrol repath rule; attention = one busy flag, not a focus
+  priority system unless requested).
 - Commit/push when asked; don’t invent scope. Keep the scene playable
   on both desktop and phone.
 
@@ -135,8 +159,12 @@ Quick anti-patterns (don’t do these)
 - Door frames that don’t match the wall hole
 - Handles on the wrong face of objects
 - Furniture clipping walls or each other
+- Floating gaps between parts of one fixture
 - Always-visible control walls of text
 - Heavy per-frame decoration animation on mobile
 - Overlapping avoid zones that trap patrol NPCs
+- Using the word LUAC anywhere in the project
+- Snapping out of a pose that eased in smoothly
+- Overbuilt “smartest NPC” selection when a simple busy-flag is enough
 
 End of preferences.

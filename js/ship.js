@@ -3395,26 +3395,50 @@ function makeShowerFixtures(group, x, y, z, rotY = 0) {
   g.position.set(x, y, z);
   g.rotation.y = rotY;
   group.add(g);
+  const chrome = mat(0xf2f4f6, { metalness: 0.92, roughness: 0.1 });
+  const metal = mat(METAL, { metalness: 0.78, roughness: 0.22 });
+
   // floor drain
-  g.add(cyl(0.18, 0.18, 0.03, mat(0x6a7480, { metalness: 0.7, roughness: 0.3 }), 0, 0.02, 0.1, 16));
-  // wall pipe + head — pole lower end touches the control circle
+  g.add(cyl(0.18, 0.18, 0.03, mat(0x6a7480, { metalness: 0.7, roughness: 0.3 }), 0, 0.02, 0.08, 16));
+
+  // hug stall back wall (~−depth/2); keep every piece touching the next
+  const wallZ = -0.94;
   const dialY = 1.1;
   const dialR = 0.078;
-  const poleBot = dialY + dialR;
-  const poleTop = 3.45;
-  const poleH = poleTop - poleBot;
-  g.add(cyl(0.035, 0.035, poleH, mat(METAL, { metalness: 0.75, roughness: 0.25 }), 0, (poleBot + poleTop) * 0.5, -0.48, 8));
-  const head = cyl(0.12, 0.08, 0.08, mat(METAL, { metalness: 0.8, roughness: 0.2 }), 0, 3.45, -0.35, 12);
-  head.rotation.x = Math.PI / 2;
-  g.add(head);
-  // old-school pull: small round face + large flat handle pointing down
-  const chrome = mat(0xf2f4f6, { metalness: 0.92, roughness: 0.1 });
-  g.add(cyl(0.03, 0.03, 0.07, chrome, 0, dialY, -0.52, 12));
-  const dial = cyl(dialR, dialR, 0.028, chrome, 0, dialY, -0.455, 28);
+  const dialThick = 0.03;
+  const stubLen = 0.055;
+  const poleR = 0.032;
+
+  // wall stub → dial (along Z)
+  const stub = cyl(0.026, 0.026, stubLen, chrome, 0, dialY, wallZ + stubLen * 0.5, 12);
+  stub.rotation.x = Math.PI / 2;
+  g.add(stub);
+  const dialZ = wallZ + stubLen + dialThick * 0.5;
+  const dial = cyl(dialR, dialR, dialThick, chrome, 0, dialY, dialZ, 28);
   dial.rotation.x = Math.PI / 2;
   g.add(dial);
-  // wide flat pull handle hanging below the circle
-  g.add(box(0.09, 0.22, 0.014, chrome, 0, dialY - 0.14, -0.425));
+
+  // pull handle — top overlaps dial rim so meshes touch
+  const handleH = 0.2;
+  g.add(box(0.09, handleH, 0.014, chrome, 0, dialY - dialR - handleH * 0.5 + 0.012, dialZ + 0.006));
+
+  // vertical pole on wall — bottom overlaps dial top
+  const poleZ = wallZ + poleR + 0.008;
+  const poleBot = dialY + dialR - 0.012;
+  const poleTop = 3.4;
+  const poleH = poleTop - poleBot;
+  g.add(cyl(poleR, poleR, poleH, metal, 0, (poleBot + poleTop) * 0.5, poleZ, 10));
+
+  // short neck from pole into stall, then head — all touching
+  const neckLen = 0.07;
+  const neck = cyl(0.028, 0.028, neckLen, metal, 0, poleTop, poleZ + neckLen * 0.5, 10);
+  neck.rotation.x = Math.PI / 2;
+  g.add(neck);
+  const headLen = 0.09;
+  const head = cyl(0.12, 0.08, headLen, metal, 0, poleTop, poleZ + neckLen + headLen * 0.5 - 0.01, 14);
+  head.rotation.x = Math.PI / 2;
+  g.add(head);
+
   return g;
 }
 
@@ -4540,10 +4564,10 @@ export function buildShip(scene) {
   });
   zones.push(toilets.userData);
 
-  // 5 toilet + 5 shower slots, shifted east
+  // 5 toilet + 5 shower slots — banks snug against N/S walls
   makeStallBank(toilets, colliders, interactables, toiletsOx, toiletsOz, {
     cx: 2.0,
-    cz: 2.7,
+    cz: 3.25,
     count: 5,
     stallW: 1.55,
     depth: 2.05,
@@ -4553,7 +4577,7 @@ export function buildShip(scene) {
 
   makeStallBank(toilets, colliders, interactables, toiletsOx, toiletsOz, {
     cx: 2.0,
-    cz: -2.7,
+    cz: -3.25,
     count: 5,
     stallW: 1.55,
     depth: 1.95,
