@@ -2158,29 +2158,34 @@ function clampPatrolPoint(x, z, bounds, avoid) {
 
 /** Random destination at a varied angle — not stuck to axis-aligned loops. */
 function pickPatrolTarget(fromX, fromZ, bounds, avoid) {
-  const minDist = 2.0;
+  const minDist = 1.6;
   const maxDist = Math.hypot(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ);
-  for (let attempt = 0; attempt < 28; attempt++) {
+  for (let attempt = 0; attempt < 36; attempt++) {
     const ang = Math.random() * Math.PI * 2;
     const dist = minDist + Math.random() * Math.max(1.2, maxDist * 0.55);
     let x = fromX + Math.sin(ang) * dist;
     let z = fromZ + Math.cos(ang) * dist;
-    if (Math.random() < 0.35) {
+    if (Math.random() < 0.4) {
       x = bounds.minX + Math.random() * (bounds.maxX - bounds.minX);
       z = bounds.minZ + Math.random() * (bounds.maxZ - bounds.minZ);
     }
     x = THREE.MathUtils.clamp(x, bounds.minX, bounds.maxX);
     z = THREE.MathUtils.clamp(z, bounds.minZ, bounds.maxZ);
+    // keep targets clear of avoid discs
+    let inAvoid = false;
+    for (const a of avoid) {
+      if (Math.hypot(x - a.x, z - a.z) < a.r + 0.2) {
+        inAvoid = true;
+        break;
+      }
+    }
+    if (inAvoid) continue;
     const travel = Math.hypot(x - fromX, z - fromZ);
     if (travel < minDist) continue;
     let blocked = false;
     for (const a of avoid) {
-      if (Math.hypot(x - a.x, z - a.z) < a.r) {
-        blocked = true;
-        break;
-      }
       const nearest = pointSegDist(a.x, a.z, fromX, fromZ, x, z);
-      if (nearest < a.r * 0.85) {
+      if (nearest < a.r * 0.75) {
         blocked = true;
         break;
       }
@@ -2188,12 +2193,20 @@ function pickPatrolTarget(fromX, fromZ, bounds, avoid) {
     if (blocked) continue;
     return { x, z };
   }
-  return clampPatrolPoint(
-    bounds.minX + Math.random() * (bounds.maxX - bounds.minX),
-    bounds.minZ + Math.random() * (bounds.maxZ - bounds.minZ),
-    bounds,
-    avoid,
-  );
+  // fallback: pick a free point inside bounds (no path check)
+  for (let attempt = 0; attempt < 24; attempt++) {
+    const x = bounds.minX + Math.random() * (bounds.maxX - bounds.minX);
+    const z = bounds.minZ + Math.random() * (bounds.maxZ - bounds.minZ);
+    let ok = true;
+    for (const a of avoid) {
+      if (Math.hypot(x - a.x, z - a.z) < a.r + 0.25) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok && Math.hypot(x - fromX, z - fromZ) > 0.8) return { x, z };
+  }
+  return { x: fromX, z: fromZ };
 }
 
 function pointSegDist(px, pz, ax, az, bx, bz) {
@@ -2267,23 +2280,12 @@ export function updatePatrolCrew(crew, dt, t, playerPos = null, maxDist = 30) {
     }
 
     const target = p.target;
-    let dx = target.x - av.position.x;
-    let dz = target.z - av.position.z;
-    for (const a of p.avoid) {
-      const ox = av.position.x - a.x;
-      const oz = av.position.z - a.z;
-      const od = Math.hypot(ox, oz);
-      if (od < a.r + 0.35 && od > 1e-4) {
-        const push = (a.r + 0.35 - od) * 2.2;
-        dx += (ox / od) * push;
-        dz += (oz / od) * push;
-      }
-    }
-    const dist = Math.hypot(dx, dz);
+    const dx = target.x - av.position.x;
+    const dz = target.z - av.position.z;
+    const arriveDist = Math.hypot(dx, dz);
     const speed = p.mode === "run" ? p.speedRun : p.speedWalk;
-    const arriveDist = Math.hypot(target.x - av.position.x, target.z - av.position.z);
 
-    if (arriveDist < 0.16) {
+    if (arriveDist < 0.2) {
       if (Math.random() < 0.4) {
         p.mode = "idle";
         p.timer = 1.0 + Math.random() * 3.2;
@@ -2293,15 +2295,24 @@ export function updatePatrolCrew(crew, dt, t, playerPos = null, maxDist = 30) {
       continue;
     }
 
-    const inv = 1 / (dist || 1);
+    const inv = 1 / arriveDist;
     const nx = dx * inv;
     const nz = dz * inv;
     const step = Math.min(arriveDist, speed * dt);
+    const prevX = av.position.x;
+    const prevZ = av.position.z;
     av.position.x += nx * step;
     av.position.z += nz * step;
     const clamped = clampPatrolPoint(av.position.x, av.position.z, p.bounds, p.avoid);
     av.position.x = clamped.x;
     av.position.z = clamped.z;
+
+    // blocked by furniture/bounds → just pick a new walk direction (cheap, only when needed)
+    const moved = Math.hypot(av.position.x - prevX, av.position.z - prevZ);
+    if (moved < step * 0.3) {
+      beginPatrolMove(p, av);
+      continue;
+    }
 
     const face = Math.atan2(nx, nz);
     let dyaw = face - av.rotation.y;
@@ -3932,13 +3943,13 @@ export function buildShip(scene) {
   // neon script on south wall behind the dining table
   makeDeliciousNeon(conf, anim, -2.6, 2.75, -5.12);
   styleRoomLighting(conf, "conference");
-  // kitchen / diner patrol — clear of table, couches, and east counters
+  // kitchen / diner patrol — aisle around lounge (clear of couches / table)
   anim.patrolCrew.push(spawnPatrolAvatar(conf, {
-    bounds: { minX: -4.8, maxX: 3.6, minZ: -1.0, maxZ: 4.2 },
+    bounds: { minX: -4.9, maxX: 3.2, minZ: -0.35, maxZ: 4.15 },
     avoid: [
-      { x: -0.7, z: 0.6, r: 1.1 },
-      { x: 1.3, z: 0.6, r: 1.05 },
-      { x: -2.6, z: -3.0, r: 2.4 },
+      { x: -0.7, z: 0.55, r: 0.85 },
+      { x: 1.3, z: 0.55, r: 0.8 },
+      { x: 0.3, z: 1.35, r: 0.55 },
     ],
     start: { x: -4.2, z: 2.5 },
   }));
