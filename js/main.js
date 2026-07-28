@@ -51,13 +51,24 @@ async function boot() {
   scene.fog = new THREE.Fog(0xd8dde4, 40, 90);
 
   const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.08, 120);
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  // Mobile GPUs choke on pixel count + PBR far more than desktop; Roblox is native C++ with batching/LOD.
+  const mobileQuality = touchMode;
+  const renderer = new THREE.WebGLRenderer({
+    antialias: !mobileQuality,
+    powerPreference: mobileQuality ? "high-performance" : "default",
+    stencil: false,
+  });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, mobileQuality ? 1.25 : 2));
   renderer.setSize(innerWidth, innerHeight);
   renderer.shadowMap.enabled = false;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.2;
+  if (mobileQuality) {
+    renderer.toneMapping = THREE.LinearToneMapping;
+    renderer.toneMappingExposure = 1.05;
+  } else {
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.2;
+  }
   document.body.appendChild(renderer.domElement);
 
   scene.add(new THREE.AmbientLight(0xffffff, 0.72));
@@ -314,6 +325,7 @@ async function boot() {
     }
   }
 
+  let frame = 0;
   function tick() {
     let dt = Math.min(clock.getDelta(), 0.05);
     if (skipDeltas > 0) {
@@ -321,16 +333,25 @@ async function boot() {
       dt = 0;
     }
     const t = clock.elapsedTime;
+    frame += 1;
     player.update(dt);
     updateAutoDoors(ship.autoDoors, player.position, dt);
     updateStallDoors(ship.interactables, dt);
     updateSittingCrew(ship.anim.sittingCrew, dt, t);
     updatePatrolCrew(ship.anim.patrolCrew, dt, t);
     updatePlants(ship.anim, t);
-    animateDeco(t);
+    // deco / starfield are expensive — throttle on mobile
+    if (!mobileQuality || (frame & 1) === 0) {
+      animateDeco(t);
+    }
 
     if (ship.mainScreen.userData.mode === "outside") {
-      spaceView.update(t, renderer);
+      const sdx = player.position.x - ship.interactPos.x;
+      const sdz = player.position.z - ship.interactPos.z;
+      const nearScreen = Math.hypot(sdx, sdz) < 22;
+      if (nearScreen && (!mobileQuality || frame % 3 === 0)) {
+        spaceView.update(t, renderer);
+      }
     }
 
     labelTimer += dt;
