@@ -81,10 +81,22 @@ export class Player {
       return;
     }
 
-    // right virtual stick — continuous look
+    // right virtual stick — look speed ramps toward the rim (precise center, fast edge)
     if (this.lookStickX || this.lookStickY) {
-      const lookRate = 6.8;
-      this.look(this.lookStickX * lookRate * 60 * dt, this.lookStickY * lookRate * 60 * dt);
+      const lx = this.lookStickX;
+      const ly = this.lookStickY;
+      const mag = Math.hypot(lx, ly);
+      const dead = 0.07;
+      if (mag > dead) {
+        const t = Math.min(1, (mag - dead) / (1 - dead));
+        // ease-in: gradual then stronger near the edge
+        const shaped = t * t * (1.15 - 0.15 * t);
+        const minRate = 2.4;
+        const maxRate = 12.5;
+        const rate = minRate + (maxRate - minRate) * shaped;
+        const inv = 1 / mag;
+        this.look(lx * inv * rate * 60 * dt, ly * inv * rate * 60 * dt);
+      }
     }
 
     const forward = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
