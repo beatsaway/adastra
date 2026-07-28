@@ -320,14 +320,14 @@ canvas {
 #btn-interact {
   pointer-events: auto;
   position: absolute;
-  width: 64px;
-  height: 64px;
+  width: 52px;
+  height: 52px;
   border-radius: 50%;
   border: 2px solid rgba(255, 255, 255, 0.55);
   background: rgba(30, 40, 55, 0.35);
   color: #fff;
   font-family: "Orbitron", sans-serif;
-  font-size: 0.68rem;
+  font-size: 0.58rem;
   letter-spacing: 0.04em;
   touch-action: none;
   -webkit-user-select: none;
@@ -335,14 +335,14 @@ canvas {
 }
 
 #btn-sprint {
-  right: 1.1rem;
-  bottom: 8.6rem;
+  right: 1.35rem;
+  bottom: 7.35rem;
 }
 
 #btn-interact {
-  right: 5.5rem;
-  bottom: 8.6rem;
-  font-size: 1.05rem;
+  right: 4.85rem;
+  bottom: 7.35rem;
+  font-size: 0.92rem;
   font-weight: 700;
 }
 
