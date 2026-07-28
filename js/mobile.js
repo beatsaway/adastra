@@ -1,4 +1,4 @@
-/** Roblox-style mobile: left stick move, right drag look, action buttons. */
+/** Dual circle sticks for mobile: left = move, right = look. */
 
 export function isTouchDevice() {
   return (
@@ -16,118 +16,125 @@ export function isTouchDevice() {
  * }} opts
  */
 export function setupMobileControls({ player, onInteract, root }) {
-  const joyZone = root.querySelector("#joy-zone");
-  const joyBase = root.querySelector("#joy-base");
-  const joyKnob = root.querySelector("#joy-knob");
+  const moveZone = root.querySelector("#move-zone");
+  const moveBase = root.querySelector("#move-base");
+  const moveKnob = root.querySelector("#move-knob");
   const lookZone = root.querySelector("#look-zone");
+  const lookBase = root.querySelector("#look-base");
+  const lookKnob = root.querySelector("#look-knob");
   const btnSprint = root.querySelector("#btn-sprint");
   const btnInteract = root.querySelector("#btn-interact");
 
-  const maxR = 48;
-  let joyId = null;
+  const maxR = 46;
+  let moveId = null;
   let lookId = null;
-  let lastLookX = 0;
-  let lastLookY = 0;
-  let baseX = 0;
-  let baseY = 0;
+  let moveOriginX = 0;
+  let moveOriginY = 0;
+  let lookOriginX = 0;
+  let lookOriginY = 0;
 
-  function setStick(nx, ny) {
+  function setMove(nx, ny) {
     player.stickX = nx;
     player.stickY = ny;
-    joyKnob.style.transform = `translate(${nx * maxR}px, ${ny * maxR}px)`;
+    moveKnob.style.transform = `translate(${nx * maxR}px, ${-ny * maxR}px)`;
   }
 
-  function resetStick() {
-    joyId = null;
-    setStick(0, 0);
-    joyBase.classList.remove("active");
+  function setLook(nx, ny) {
+    player.lookStickX = nx;
+    player.lookStickY = ny;
+    lookKnob.style.transform = `translate(${nx * maxR}px, ${ny * maxR}px)`;
   }
 
-  joyZone.addEventListener(
-    "touchstart",
-    (e) => {
-      if (joyId != null) return;
-      const t = e.changedTouches[0];
-      joyId = t.identifier;
-      const rect = joyZone.getBoundingClientRect();
-      const cx = Math.min(Math.max(t.clientX - rect.left, 56), rect.width - 56);
-      const cy = Math.min(Math.max(t.clientY - rect.top, 56), rect.height - 56);
-      joyBase.style.left = `${cx}px`;
-      joyBase.style.top = `${cy}px`;
-      baseX = rect.left + cx;
-      baseY = rect.top + cy;
-      joyBase.classList.add("active");
-      setStick(0, 0);
-      e.preventDefault();
-    },
-    { passive: false },
-  );
+  function bindStick(zone, base, onSet, getId, setId, getOx, setOx, getOy, setOy, invertY) {
+    zone.addEventListener(
+      "touchstart",
+      (e) => {
+        if (getId() != null) return;
+        const t = e.changedTouches[0];
+        setId(t.identifier);
+        const rect = base.getBoundingClientRect();
+        setOx(rect.left + rect.width * 0.5);
+        setOy(rect.top + rect.height * 0.5);
+        base.classList.add("active");
+        onSet(0, 0);
+        e.preventDefault();
+      },
+      { passive: false },
+    );
 
-  joyZone.addEventListener(
-    "touchmove",
-    (e) => {
-      if (joyId == null) return;
-      for (const t of e.changedTouches) {
-        if (t.identifier !== joyId) continue;
-        let dx = t.clientX - baseX;
-        let dy = t.clientY - baseY;
-        const len = Math.hypot(dx, dy) || 1;
-        if (len > maxR) {
-          dx = (dx / len) * maxR;
-          dy = (dy / len) * maxR;
+    zone.addEventListener(
+      "touchmove",
+      (e) => {
+        const id = getId();
+        if (id == null) return;
+        for (const t of e.changedTouches) {
+          if (t.identifier !== id) continue;
+          let dx = t.clientX - getOx();
+          let dy = t.clientY - getOy();
+          const len = Math.hypot(dx, dy) || 1;
+          if (len > maxR) {
+            dx = (dx / len) * maxR;
+            dy = (dy / len) * maxR;
+          }
+          const nx = dx / maxR;
+          const ny = invertY ? -(dy / maxR) : dy / maxR;
+          onSet(nx, ny);
+          e.preventDefault();
         }
-        setStick(dx / maxR, -dy / maxR);
-        e.preventDefault();
-      }
-    },
-    { passive: false },
-  );
+      },
+      { passive: false },
+    );
 
-  const endJoy = (e) => {
-    for (const t of e.changedTouches) {
-      if (t.identifier === joyId) resetStick();
-    }
-  };
-  joyZone.addEventListener("touchend", endJoy);
-  joyZone.addEventListener("touchcancel", endJoy);
-
-  lookZone.addEventListener(
-    "touchstart",
-    (e) => {
-      if (lookId != null) return;
-      const t = e.changedTouches[0];
-      lookId = t.identifier;
-      lastLookX = t.clientX;
-      lastLookY = t.clientY;
-      e.preventDefault();
-    },
-    { passive: false },
-  );
-
-  lookZone.addEventListener(
-    "touchmove",
-    (e) => {
-      if (lookId == null) return;
+    const end = (e) => {
       for (const t of e.changedTouches) {
-        if (t.identifier !== lookId) continue;
-        const dx = t.clientX - lastLookX;
-        const dy = t.clientY - lastLookY;
-        lastLookX = t.clientX;
-        lastLookY = t.clientY;
-        player.look(dx * 1.55, dy * 1.55);
-        e.preventDefault();
+        if (t.identifier === getId()) {
+          setId(null);
+          onSet(0, 0);
+          base.classList.remove("active");
+        }
       }
+    };
+    zone.addEventListener("touchend", end);
+    zone.addEventListener("touchcancel", end);
+  }
+
+  bindStick(
+    moveZone,
+    moveBase,
+    setMove,
+    () => moveId,
+    (v) => {
+      moveId = v;
     },
-    { passive: false },
+    () => moveOriginX,
+    (v) => {
+      moveOriginX = v;
+    },
+    () => moveOriginY,
+    (v) => {
+      moveOriginY = v;
+    },
+    true,
   );
 
-  const endLook = (e) => {
-    for (const t of e.changedTouches) {
-      if (t.identifier === lookId) lookId = null;
-    }
-  };
-  lookZone.addEventListener("touchend", endLook);
-  lookZone.addEventListener("touchcancel", endLook);
+  bindStick(
+    lookZone,
+    lookBase,
+    setLook,
+    () => lookId,
+    (v) => {
+      lookId = v;
+    },
+    () => lookOriginX,
+    (v) => {
+      lookOriginX = v;
+    },
+    () => lookOriginY,
+    (v) => {
+      lookOriginY = v;
+    },
+    false,
+  );
 
   const hold = (btn, on, off) => {
     const start = (e) => {
@@ -173,8 +180,11 @@ export function setupMobileControls({ player, onInteract, root }) {
     },
     hide() {
       root.classList.add("hidden");
-      resetStick();
+      setMove(0, 0);
+      setLook(0, 0);
       player.mobileSprint = false;
+      moveBase.classList.remove("active");
+      lookBase.classList.remove("active");
     },
   };
 }

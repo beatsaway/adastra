@@ -52,6 +52,8 @@ export class Player {
     this.locked = false;
     this.stickX = 0;
     this.stickY = 0;
+    this.lookStickX = 0;
+    this.lookStickY = 0;
     this.mobileSprint = false;
     this._onMove = this._onMove.bind(this);
 
@@ -77,6 +79,12 @@ export class Player {
     if (!this.locked) {
       this._applyCamera();
       return;
+    }
+
+    // right virtual stick — continuous look
+    if (this.lookStickX || this.lookStickY) {
+      const lookRate = 2.6;
+      this.look(this.lookStickX * lookRate * 60 * dt, this.lookStickY * lookRate * 60 * dt);
     }
 
     const forward = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));

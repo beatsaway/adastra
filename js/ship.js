@@ -1994,11 +1994,17 @@ function seatCrewAtChair(room, x, z, rotY = 0, scale = 0.44) {
 }
 
 /** Idle fidgets while avatars are in sitting state — arms + head nod / look around. */
-export function updateSittingCrew(crew, dt, t) {
+const _avWorld = new THREE.Vector3();
+export function updateSittingCrew(crew, dt, t, playerPos = null, maxDist = 26) {
   if (!crew) return;
+  const maxD2 = maxDist * maxDist;
   for (let i = 0; i < crew.length; i++) {
     const av = crew[i];
     if (av.userData.state !== "sitting") continue;
+    if (playerPos) {
+      av.getWorldPosition(_avWorld);
+      if (_avWorld.distanceToSquared(playerPos) > maxD2) continue;
+    }
     const s = av.userData.sit;
     const { head, leftArm, rightArm } = av.userData;
     if (!s || !head || !leftArm || !rightArm) continue;
@@ -2208,11 +2214,16 @@ function beginPatrolMove(p, av) {
 }
 
 /** Advance patrol avatars: idle fidgets, walk/run locomotion + limb gait. */
-export function updatePatrolCrew(crew, dt, t) {
+export function updatePatrolCrew(crew, dt, t, playerPos = null, maxDist = 30) {
   if (!crew) return;
+  const maxD2 = maxDist * maxDist;
   for (let i = 0; i < crew.length; i++) {
     const av = crew[i];
     if (av.userData.state !== "patrol") continue;
+    if (playerPos) {
+      av.getWorldPosition(_avWorld);
+      if (_avWorld.distanceToSquared(playerPos) > maxD2) continue;
+    }
     const p = av.userData.patrol;
     const { head, leftArm, rightArm, leftLeg, rightLeg } = av.userData;
     if (!p || !head || !leftArm || !rightArm || !leftLeg || !rightLeg) continue;
@@ -4120,6 +4131,63 @@ export function buildShip(scene) {
     mainScreen,
     interactPos,
   };
+}
+
+/**
+ * Mobile GPU pass: swap PBR Standard/Physical materials for Lambert/Basic.
+ * Keeps maps/emissive where useful; flattens expensive glass transmission.
+ */
+export function downgradeMaterialsForMobile(root) {
+  if (!root) return;
+  const cache = new Map();
+  root.traverse((obj) => {
+    if (obj.isPointLight) {
+      obj.intensity *= 0.55;
+      if (obj.distance > 0) obj.distance *= 0.85;
+      return;
+    }
+    if (!obj.isMesh || !obj.material) return;
+    const list = Array.isArray(obj.material) ? obj.material : [obj.material];
+    const next = list.map((m) => {
+      if (cache.has(m)) return cache.get(m);
+      if (!m || m.isMeshBasicMaterial || m.isMeshLambertMaterial) {
+        cache.set(m, m);
+        return m;
+      }
+      if (m.isMeshStandardMaterial || m.isMeshPhysicalMaterial) {
+        const trans = (m.transmission || 0) > 0.05 || (m.transparent && (m.opacity ?? 1) < 0.92);
+        let nm;
+        if (trans) {
+          nm = new THREE.MeshBasicMaterial({
+            color: m.color ? m.color.clone() : 0xffffff,
+            map: m.map || null,
+            transparent: true,
+            opacity: Math.min(0.5, m.opacity ?? 0.45),
+            side: m.side ?? THREE.FrontSide,
+            depthWrite: false,
+          });
+        } else {
+          const em = m.emissive ? m.emissive.clone() : new THREE.Color(0x000000);
+          const emSum = em.r + em.g + em.b;
+          nm = new THREE.MeshLambertMaterial({
+            color: m.color ? m.color.clone() : 0xffffff,
+            map: m.map || null,
+            emissive: em,
+            emissiveMap: m.emissiveMap || null,
+            emissiveIntensity: emSum > 0.01 ? (m.emissiveIntensity ?? 1) : 0,
+            transparent: !!m.transparent,
+            opacity: m.opacity ?? 1,
+            side: m.side ?? THREE.FrontSide,
+          });
+        }
+        cache.set(m, nm);
+        return nm;
+      }
+      cache.set(m, m);
+      return m;
+    });
+    obj.material = Array.isArray(obj.material) ? next : next[0];
+  });
 }
 
 /** Slide glass doors open/closed based on player proximity. */

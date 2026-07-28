@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { buildShip, createSpaceView, updateAutoDoors, updateStallDoors, nearestInteractable, updateSittingCrew, updatePatrolCrew, updatePlants } from "./ship.js";
+import { buildShip, createSpaceView, updateAutoDoors, updateStallDoors, nearestInteractable, updateSittingCrew, updatePatrolCrew, updatePlants, downgradeMaterialsForMobile } from "./ship.js";
 import { Player } from "./player.js";
 import { isTouchDevice, setupMobileControls } from "./mobile.js";
 
@@ -88,6 +88,12 @@ async function boot() {
 
   setProgress(48, "Loading…");
   const ship = buildShip(scene);
+  if (mobileQuality) {
+    downgradeMaterialsForMobile(ship.root);
+    if (ship.mainScreen?.userData?.screenMesh) {
+      ship.mainScreen.userData.defaultMat = ship.mainScreen.userData.screenMesh.material;
+    }
+  }
 
   const screenW = ship.mainScreen.userData.width || 6.5;
   const screenH = ship.mainScreen.userData.height || 2.6;
@@ -172,14 +178,14 @@ async function boot() {
     hintEl.classList.add("mobile-help");
     hintEl.innerHTML =
       "<strong>Mobile controls</strong>" +
-      "Left stick — move<br>" +
-      "Right side — drag to look<br>" +
+      "Left circle — move<br>" +
+      "Right circle — look<br>" +
       "Sprint — hold to run<br>" +
       "E — interact";
     const keysEl = overlay.querySelector(".keys");
     if (keysEl) {
       keysEl.innerHTML =
-        "Left stick · Right drag look<br>Sprint · E to interact · ? for help";
+        "Left stick · Right stick look<br>Sprint · E to interact · ? for help";
     }
   }
 
@@ -337,11 +343,17 @@ async function boot() {
     player.update(dt);
     updateAutoDoors(ship.autoDoors, player.position, dt);
     updateStallDoors(ship.interactables, dt);
-    updateSittingCrew(ship.anim.sittingCrew, dt, t);
-    updatePatrolCrew(ship.anim.patrolCrew, dt, t);
+    updateSittingCrew(ship.anim.sittingCrew, dt, t, player.position, mobileQuality ? 24 : 40);
+    updatePatrolCrew(ship.anim.patrolCrew, dt, t, player.position, mobileQuality ? 28 : 45);
     updatePlants(ship.anim, t);
-    // deco / starfield are expensive — throttle on mobile
-    if (!mobileQuality || (frame & 1) === 0) {
+    // deco only when near animated areas; throttle harder on mobile
+    const px = player.position.x;
+    const pz = player.position.z;
+    const nearDeco =
+      Math.hypot(px, pz - 4.5) < 20 ||
+      Math.hypot(px, pz - 22) < 18 ||
+      Math.hypot(px, pz + 25.5) < 20;
+    if (nearDeco && (!mobileQuality || (frame & 1) === 0)) {
       animateDeco(t);
     }
 
