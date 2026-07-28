@@ -1991,7 +1991,7 @@ function seatCrewAtChair(room, x, z, rotY = 0, scale = 0.44) {
     seatX,
     seatZ,
     sitY,
-    attnRadius: 2.0,
+    attnRadius: 1.7,
     nearHold: 0,
     farHold: 0,
   };
@@ -2019,7 +2019,7 @@ export function updateSittingCrew(crew, dt, t, playerPos = null, maxDist = 26) {
     let dist2 = Infinity;
     if (playerPos) dist2 = _avWorld.distanceToSquared(playerPos);
 
-    const attnR = s.attnRadius ?? 2.0;
+    const attnR = s.attnRadius ?? 1.7;
     const attnR2 = attnR * attnR;
     if (playerPos) {
       if (dist2 <= attnR2) {
@@ -2120,8 +2120,8 @@ export function updateSittingCrew(crew, dt, t, playerPos = null, maxDist = 26) {
  * Modes: av.userData.patrol.mode = "idle" | "walk" | "run"
  * State: av.userData.state = "patrol" | "attention" (attention.pose = "stand"|"sit")
  *
- * Stay within attnRadius (~2.0) for ~0.6s → attention (body/hip then head face you).
- * Leave beyond that radius for ~0.2s, then ~0.4s smooth blend back to previous state.
+ * Stay within attnRadius (~1.7) for ~0.3s → attention (body/hip then head face you).
+ * Leave beyond that radius for ~0.3s, then ~0.4s smooth blend back to previous state.
  * Only one NPC at a time: don't start attention if someone is already attending.
  *
  * @param {THREE.Object3D} room
@@ -2164,7 +2164,7 @@ function spawnPatrolAvatar(room, area, scale = 0.44) {
     headTargetX: 0,
     headTargetY: 0,
     headTargetZ: 0,
-    attnRadius: 2.0,
+    attnRadius: 1.7,
     nearHold: 0,
     farHold: 0,
     resumeMode: "idle",
@@ -2279,8 +2279,8 @@ function beginPatrolMove(p, av) {
   p.headTargetZ = 0;
 }
 
-const ATTENTION_ENTER = 0.6;
-const ATTENTION_EXIT = 0.2;
+const ATTENTION_ENTER = 0.3;
+const ATTENTION_EXIT = 0.3;
 const ATTENTION_BLEND_OUT = 0.4;
 
 /** At most one NPC in attention — set on enter, cleared on exit. */
@@ -2602,10 +2602,10 @@ export function updatePatrolCrew(crew, dt, t, playerPos = null, maxDist = 30) {
     let dist2 = Infinity;
     if (playerPos) dist2 = _avWorld.distanceToSquared(playerPos);
 
-    const attnR = p.attnRadius ?? 2.0;
+    const attnR = p.attnRadius ?? 1.7;
     const attnR2 = attnR * attnR;
 
-    // near ~0.6s → attention; leave ~0.2s then smooth blend out. skip if someone already attending
+    // near ~0.3s → attention; leave ~0.3s then smooth blend out. skip if someone already attending
     if (playerPos) {
       if (dist2 <= attnR2) {
         p.farHold = 0;
