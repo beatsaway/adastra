@@ -1,10 +1,16 @@
 /** Dual circle sticks for mobile: left = move, right = look. */
 
+/** True only for phones/tablets — not touchscreen laptops with a mouse. */
 export function isTouchDevice() {
+  // Windows / Chromebook touch laptops often report ontouchstart + maxTouchPoints > 0.
+  // Those still have a fine pointer; treating them as mobile skips pointer-lock and
+  // mouse look dies at the screen edge (~180° turn). Prefer mouse/FPS when available.
+  const fine = window.matchMedia("(pointer: fine)").matches;
+  if (fine) return false;
   return (
-    "ontouchstart" in window ||
-    (navigator.maxTouchPoints || 0) > 0 ||
-    window.matchMedia("(pointer: coarse)").matches
+    window.matchMedia("(pointer: coarse)").matches ||
+    window.matchMedia("(hover: none)").matches ||
+    ((navigator.maxTouchPoints || 0) > 0 && "ontouchstart" in window)
   );
 }
 

@@ -55,6 +55,7 @@ export class Player {
     this.lookStickX = 0;
     this.lookStickY = 0;
     this.mobileSprint = false;
+    this._euler = new THREE.Euler(0, 0, 0, "YXZ");
     this._onMove = this._onMove.bind(this);
 
     document.addEventListener("mousemove", this._onMove);
@@ -62,17 +63,39 @@ export class Player {
 
   _onMove(e) {
     if (!this.locked) return;
-    this.look(e.movementX, e.movementY);
+    // Prefer movementX (pointer lock). Fallback to client delta if lock unavailable.
+    let dx = e.movementX;
+    let dy = e.movementY;
+    if (dx === 0 && dy === 0 && e.clientX != null) {
+      if (this._lastClientX != null) {
+        dx = e.clientX - this._lastClientX;
+        dy = e.clientY - this._lastClientY;
+      }
+      this._lastClientX = e.clientX;
+      this._lastClientY = e.clientY;
+    } else {
+      this._lastClientX = e.clientX;
+      this._lastClientY = e.clientY;
+    }
+    if (dx || dy) this.look(dx, dy);
   }
 
   look(dx, dy) {
     this.yaw -= dx * 0.0022;
     this.pitch -= dy * 0.0022;
     this.pitch = Math.max(-1.35, Math.min(1.35, this.pitch));
+    // Keep yaw finite; wrap does not limit turn range (full 360+ still works)
+    if (this.yaw > Math.PI || this.yaw < -Math.PI) {
+      this.yaw = ((this.yaw + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+    }
   }
 
   setLocked(v) {
     this.locked = v;
+    if (!v) {
+      this._lastClientX = null;
+      this._lastClientY = null;
+    }
   }
 
   update(dt) {
@@ -170,9 +193,9 @@ export class Player {
 
   _applyCamera() {
     this.camera.position.copy(this.position);
-    this.camera.rotation.order = "YXZ";
-    this.camera.rotation.y = this.yaw;
-    this.camera.rotation.x = this.pitch;
+    // Quaternion from YXZ euler — avoids Euler component write-order quirks
+    this._euler.set(this.pitch, this.yaw, 0, "YXZ");
+    this.camera.quaternion.setFromEuler(this._euler);
   }
 
   roomLabel(zones) {
