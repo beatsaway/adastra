@@ -17,21 +17,17 @@ export function isTouchDevice() {
 /**
  * @param {{
  *   player: import("./player.js").Player,
- *   onInteract: () => void,
  *   root: HTMLElement,
  * }} opts
  */
-export function setupMobileControls({ player, onInteract, root }) {
+export function setupMobileControls({ player, root }) {
   const moveZone = root.querySelector("#move-zone");
   const moveBase = root.querySelector("#move-base");
   const moveKnob = root.querySelector("#move-knob");
   const lookZone = root.querySelector("#look-zone");
   const lookBase = root.querySelector("#look-base");
   const lookKnob = root.querySelector("#look-knob");
-  const btnSprint = root.querySelector("#btn-sprint");
-  const btnInteract = root.querySelector("#btn-interact");
 
-  const maxR = 46;
   let moveId = null;
   let lookId = null;
   let moveOriginX = 0;
@@ -39,16 +35,24 @@ export function setupMobileControls({ player, onInteract, root }) {
   let lookOriginX = 0;
   let lookOriginY = 0;
 
+  /** Travel radius scales with current stick base size (viewport %). */
+  function travelR(base) {
+    const w = base.getBoundingClientRect().width;
+    return Math.max(10, w * 0.39);
+  }
+
   function setMove(nx, ny) {
     player.stickX = nx;
     player.stickY = ny;
-    moveKnob.style.transform = `translate(${nx * maxR}px, ${-ny * maxR}px)`;
+    const r = travelR(moveBase);
+    moveKnob.style.transform = `translate(${nx * r}px, ${-ny * r}px)`;
   }
 
   function setLook(nx, ny) {
     player.lookStickX = nx;
     player.lookStickY = ny;
-    lookKnob.style.transform = `translate(${nx * maxR}px, ${ny * maxR}px)`;
+    const r = travelR(lookBase);
+    lookKnob.style.transform = `translate(${nx * r}px, ${ny * r}px)`;
   }
 
   function bindStick(zone, base, onSet, getId, setId, getOx, setOx, getOy, setOy, invertY) {
@@ -73,6 +77,7 @@ export function setupMobileControls({ player, onInteract, root }) {
       (e) => {
         const id = getId();
         if (id == null) return;
+        const maxR = travelR(base);
         for (const t of e.changedTouches) {
           if (t.identifier !== id) continue;
           let dx = t.clientX - getOx();
@@ -141,44 +146,6 @@ export function setupMobileControls({ player, onInteract, root }) {
     },
     false,
   );
-
-  const hold = (btn, on, off) => {
-    const start = (e) => {
-      e.preventDefault();
-      on();
-      btn.classList.add("active");
-    };
-    const end = (e) => {
-      e.preventDefault();
-      off();
-      btn.classList.remove("active");
-    };
-    btn.addEventListener("touchstart", start, { passive: false });
-    btn.addEventListener("touchend", end);
-    btn.addEventListener("touchcancel", end);
-  };
-
-  hold(
-    btnSprint,
-    () => {
-      player.mobileSprint = true;
-    },
-    () => {
-      player.mobileSprint = false;
-    },
-  );
-
-  btnInteract.addEventListener(
-    "touchstart",
-    (e) => {
-      e.preventDefault();
-      btnInteract.classList.add("active");
-      onInteract();
-    },
-    { passive: false },
-  );
-  btnInteract.addEventListener("touchend", () => btnInteract.classList.remove("active"));
-  btnInteract.addEventListener("touchcancel", () => btnInteract.classList.remove("active"));
 
   return {
     show() {

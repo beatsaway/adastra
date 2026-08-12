@@ -1,0 +1,1026 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Door SFX test · My Ship</title>
+  <style>
+    :root {
+      --bg: #0a0c10;
+      --panel: #141820;
+      --text: #e8eaee;
+      --muted: #8a93a3;
+      --line: #2a3140;
+      --accent: #66ffe0;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: ui-monospace, Consolas, "Cascadia Code", monospace;
+      background: var(--bg);
+      color: var(--text);
+      padding: 1.25rem 1rem 2.5rem;
+    }
+    h1 {
+      margin: 0 0 0.35rem;
+      font-size: 1.15rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .sub {
+      margin: 0 0 1.25rem;
+      color: var(--muted);
+      font-size: 0.85rem;
+      line-height: 1.45;
+      max-width: 40rem;
+    }
+    .grid {
+      display: grid;
+      gap: 0.65rem;
+      max-width: 40rem;
+    }
+    button.sfx {
+      appearance: none;
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 0.35rem 0.85rem;
+      align-items: baseline;
+      width: 100%;
+      text-align: left;
+      padding: 0.85rem 1rem;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel);
+      color: var(--text);
+      font: inherit;
+      cursor: pointer;
+    }
+    button.sfx:hover,
+    button.sfx:focus-visible {
+      border-color: var(--accent);
+      outline: none;
+    }
+    button.sfx:active {
+      transform: translateY(1px);
+    }
+    .num {
+      color: var(--accent);
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+    .name { font-weight: 650; }
+    .desc {
+      grid-column: 2;
+      color: var(--muted);
+      font-size: 0.78rem;
+      line-height: 1.35;
+    }
+    .status {
+      margin-top: 1.25rem;
+      color: var(--muted);
+      font-size: 0.8rem;
+      min-height: 1.2em;
+    }
+  </style>
+</head>
+<body>
+  <h1>Door SFX · A/B test</h1>
+  <p class="sub">
+    Ten procedural Star Wars–ish hatch sounds. Click each (browser needs a click to unlock audio).
+    Pick the closest “bb-shhhhh” pneumatic slide.
+  </p>
+  <div class="grid" id="grid"></div>
+  <p class="status" id="status">Ready.</p>
+
+  <script type="module">
+    import { resumeAudio, getAudioCtx } from "./ctx.js";
+
+    function noiseBuffer(ctx, seconds, flavor = "pink") {
+      const n = Math.max(1, Math.floor(ctx.sampleRate * seconds));
+      const buf = ctx.createBuffer(1, n, ctx.sampleRate);
+      const data = buf.getChannelData(0);
+      let b0 = 0, b1 = 0, b2 = 0;
+      for (let i = 0; i < n; i++) {
+        const white = Math.random() * 2 - 1;
+        if (flavor === "white") {
+          data[i] = white;
+        } else if (flavor === "brown") {
+          b0 = (b0 + white * 0.02) * 0.996;
+          data[i] = b0 * 3.5;
+        } else {
+          // pink-ish
+          b0 = 0.997 * b0 + white * 0.04;
+          b1 = 0.985 * b1 + white * 0.08;
+          b2 = 0.95 * b2 + white * 0.12;
+          data[i] = (white * 0.25 + b0 + b1 + b2) * 0.5;
+        }
+      }
+      return buf;
+    }
+
+    /** Shared master helper */
+    function masterOut(ctx, t0) {
+      const master = ctx.createGain();
+      master.gain.value = 1;
+      master.connect(ctx.destination);
+      return master;
+    }
+
+    const VARIANTS = [
+      {
+        name: "Classic pneumatic",
+        desc: "Soft thump + long pink hiss trail (current ship default vibe).",
+        play(ctx) {
+          const t0 = ctx.currentTime;
+          const dur = 0.62;
+          const gain = 0.17;
+          const master = masterOut(ctx, t0);
+
+          const hissGain = ctx.createGain();
+          hissGain.gain.setValueAtTime(0.0001, t0);
+          hissGain.gain.exponentialRampToValueAtTime(gain, t0 + 0.025);
+          hissGain.gain.exponentialRampToValueAtTime(gain * 0.55, t0 + 0.18);
+          hissGain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+          hissGain.connect(master);
+
+          const src = ctx.createBufferSource();
+          src.buffer = noiseBuffer(ctx, dur, "pink");
+          const bp = ctx.createBiquadFilter();
+          bp.type = "bandpass";
+          bp.Q.value = 0.55;
+          bp.frequency.setValueAtTime(1400, t0);
+          bp.frequency.exponentialRampToValueAtTime(2400, t0 + 0.08);
+          bp.frequency.exponentialRampToValueAtTime(900, t0 + dur);
+          src.connect(bp); bp.connect(hissGain); src.start(t0);
+
+          const src2 = ctx.createBufferSource();
+          src2.buffer = noiseBuffer(ctx, dur * 0.85, "pink");
+          const hp = ctx.createBiquadFilter();
+          hp.type = "highpass";
+          hp.frequency.value = 1800;
+          const sh = ctx.createGain();
+          sh.gain.setValueAtTime(0.0001, t0);
+          sh.gain.exponentialRampToValueAtTime(gain * 0.45, t0 + 0.03);
+          sh.gain.exponentialRampToValueAtTime(0.0001, t0 + dur * 0.75);
+          src2.connect(hp); hp.connect(sh); sh.connect(master); src2.start(t0);
+
+          const thump = ctx.createOscillator();
+          thump.type = "sine";
+          thump.frequency.setValueAtTime(95, t0);
+          thump.frequency.exponentialRampToValueAtTime(55, t0 + 0.09);
+          const tg = ctx.createGain();
+          tg.gain.setValueAtTime(0.0001, t0);
+          tg.gain.exponentialRampToValueAtTime(gain * 0.35, t0 + 0.01);
+          tg.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.12);
+          thump.connect(tg); tg.connect(master);
+          thump.start(t0); thump.stop(t0 + 0.14);
+        },
+      },
+      {
+        name: "Death Star heavy",
+        desc: "Deeper thump, longer darker hiss — big bulkhead feel.",
+        play(ctx) {
+          const t0 = ctx.currentTime;
+          const dur = 0.85;
+          const gain = 0.2;
+          const master = masterOut(ctx, t0);
+
+          const thump = ctx.createOscillator();
+          thump.type = "triangle";
+          thump.frequency.setValueAtTime(70, t0);
+          thump.frequency.exponentialRampToValueAtTime(38, t0 + 0.14);
+          const tg = ctx.createGain();
+          tg.gain.setValueAtTime(0.0001, t0);
+          tg.gain.exponentialRampToValueAtTime(gain * 0.55, t0 + 0.012);
+          tg.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.18);
+          thump.connect(tg); tg.connect(master);
+          thump.start(t0); thump.stop(t0 + 0.2);
+
+          const src = ctx.createBufferSource();
+          src.buffer = noiseBuffer(ctx, dur, "brown");
+          const bp = ctx.createBiquadFilter();
+          bp.type = "lowpass";
+          bp.frequency.setValueAtTime(1600, t0);
+          bp.frequency.exponentialRampToValueAtTime(500, t0 + dur);
+          const g = ctx.createGain();
+          g.gain.setValueAtTime(0.0001, t0);
+          g.gain.exponentialRampToValueAtTime(gain, t0 + 0.04);
+          g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+          src.connect(bp); bp.connect(g); g.connect(master); src.start(t0);
+
+          const air = ctx.createBufferSource();
+          air.buffer = noiseBuffer(ctx, dur * 0.7, "pink");
+          const hp = ctx.createBiquadFilter();
+          hp.type = "bandpass";
+          hp.frequency.setValueAtTime(2200, t0);
+          hp.frequency.exponentialRampToValueAtTime(900, t0 + dur * 0.7);
+          hp.Q.value = 0.7;
+          const ag = ctx.createGain();
+          ag.gain.setValueAtTime(0.0001, t0);
+          ag.gain.exponentialRampToValueAtTime(gain * 0.35, t0 + 0.05);
+          ag.gain.exponentialRampToValueAtTime(0.0001, t0 + dur * 0.7);
+          air.connect(hp); hp.connect(ag); ag.connect(master); air.start(t0);
+        },
+      },
+      {
+        name: "Bright Falcon hiss",
+        desc: "Bright white-noise shhhhh, short — fast civilian hatch.",
+        play(ctx) {
+          const t0 = ctx.currentTime;
+          const dur = 0.42;
+          const gain = 0.14;
+          const master = masterOut(ctx, t0);
+
+          const src = ctx.createBufferSource();
+          src.buffer = noiseBuffer(ctx, dur, "white");
+          const bp = ctx.createBiquadFilter();
+          bp.type = "bandpass";
+          bp.Q.value = 0.9;
+          bp.frequency.setValueAtTime(2800, t0);
+          bp.frequency.exponentialRampToValueAtTime(1200, t0 + dur);
+          const g = ctx.createGain();
+          g.gain.setValueAtTime(0.0001, t0);
+          g.gain.exponentialRampToValueAtTime(gain, t0 + 0.015);
+          g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+          src.connect(bp); bp.connect(g); g.connect(master); src.start(t0);
+
+          const click = ctx.createOscillator();
+          click.type = "square";
+          click.frequency.value = 420;
+          const cg = ctx.createGain();
+          cg.gain.setValueAtTime(0.0001, t0);
+          cg.gain.exponentialRampToValueAtTime(gain * 0.12, t0 + 0.005);
+          cg.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.04);
+          click.connect(cg); cg.connect(master);
+          click.start(t0); click.stop(t0 + 0.05);
+        },
+      },
+      {
+        name: "Double-panel whoosh",
+        desc: "Two overlapping hisses (left/right panel stagger).",
+        play(ctx) {
+          const t0 = ctx.currentTime;
+          const gain = 0.15;
+          const master = masterOut(ctx, t0);
+
+          function panel(delay, startF, endF) {
+            const t = t0 + delay;
+            const dur = 0.5;
+            const src = ctx.createBufferSource();
+            src.buffer = noiseBuffer(ctx, dur, "pink");
+            const bp = ctx.createBiquadFilter();
+            bp.type = "bandpass";
+            bp.Q.value = 0.65;
+            bp.frequency.setValueAtTime(startF, t);
+            bp.frequency.exponentialRampToValueAtTime(endF, t + dur);
+            const g = ctx.createGain();
+            g.gain.setValueAtTime(0.0001, t);
+            g.gain.exponentialRampToValueAtTime(gain * 0.7, t + 0.03);
+            g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+            src.connect(bp); bp.connect(g); g.connect(master);
+            src.start(t);
+          }
+          panel(0, 1600, 800);
+          panel(0.07, 2100, 950);
+
+          const thump = ctx.createOscillator();
+          thump.type = "sine";
+          thump.frequency.setValueAtTime(100, t0);
+          thump.frequency.exponentialRampToValueAtTime(50, t0 + 0.1);
+          const tg = ctx.createGain();
+          tg.gain.setValueAtTime(0.0001, t0);
+          tg.gain.exponentialRampToValueAtTime(gain * 0.3, t0 + 0.01);
+          tg.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.12);
+          thump.connect(tg); tg.connect(master);
+          thump.start(t0); thump.stop(t0 + 0.13);
+        },
+      },
+      {
+        name: "Servo + air",
+        desc: "Rising servo whine under the hiss (more mech, still SW).",
+        play(ctx) {
+          const t0 = ctx.currentTime;
+          const dur = 0.55;
+          const gain = 0.15;
+          const master = masterOut(ctx, t0);
+
+          const servo = ctx.createOscillator();
+          servo.type = "sawtooth";
+          servo.frequency.setValueAtTime(180, t0);
+          servo.frequency.exponentialRampToValueAtTime(420, t0 + dur * 0.6);
+          const sf = ctx.createBiquadFilter();
+          sf.type = "bandpass";
+          sf.frequency.value = 500;
+          sf.Q.value = 4;
+          const sg = ctx.createGain();
+          sg.gain.setValueAtTime(0.0001, t0);
+          sg.gain.exponentialRampToValueAtTime(gain * 0.18, t0 + 0.05);
+          sg.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+          servo.connect(sf); sf.connect(sg); sg.connect(master);
+          servo.start(t0); servo.stop(t0 + dur + 0.02);
+
+          const src = ctx.createBufferSource();
+          src.buffer = noiseBuffer(ctx, dur, "pink");
+          const bp = ctx.createBiquadFilter();
+          bp.type = "bandpass";
+          bp.frequency.setValueAtTime(2000, t0);
+          bp.frequency.exponentialRampToValueAtTime(900, t0 + dur);
+          const g = ctx.createGain();
+          g.gain.setValueAtTime(0.0001, t0);
+          g.gain.exponentialRampToValueAtTime(gain, t0 + 0.02);
+          g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+          src.connect(bp); bp.connect(g); g.connect(master); src.start(t0);
+        },
+      },
+      {
+        name: "Vacuum rush",
+        desc: "Wide open bandpass sweep — big decompress shhhhh.",
+        play(ctx) {
+          const t0 = ctx.currentTime;
+          const dur = 0.7;
+          const gain = 0.18;
+          const master = masterOut(ctx, t0);
+
+          const src = ctx.createBufferSource();
+          src.buffer = noiseBuffer(ctx, dur, "white");
+          const bp = ctx.createBiquadFilter();
+          bp.type = "bandpass";
+          bp.Q.value = 0.35;
+          bp.frequency.setValueAtTime(400, t0);
+          bp.frequency.exponentialRampToValueAtTime(3500, t0 + 0.12);
+          bp.frequency.exponentialRampToValueAtTime(700, t0 + dur);
+          const g = ctx.createGain();
+          g.gain.setValueAtTime(0.0001, t0);
+          g.gain.exponentialRampToValueAtTime(gain, t0 + 0.04);
+          g.gain.linearRampToValueAtTime(gain * 0.4, t0 + 0.35);
+          g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+          src.connect(bp); bp.connect(g); g.connect(master); src.start(t0);
+
+          const thump = ctx.createOscillator();
+          thump.type = "sine";
+          thump.frequency.setValueAtTime(60, t0);
+          const tg = ctx.createGain();
+          tg.gain.setValueAtTime(0.0001, t0);
+          tg.gain.exponentialRampToValueAtTime(gain * 0.4, t0 + 0.01);
+          tg.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.15);
+          thump.connect(tg); tg.connect(master);
+          thump.start(t0); thump.stop(t0 + 0.16);
+        },
+      },
+      {
+        name: "Tight blast door",
+        desc: "Short sharp pssh + quick seal — blast door snap.",
+        play(ctx) {
+          const t0 = ctx.currentTime;
+          const dur = 0.28;
+          const gain = 0.16;
+          const master = masterOut(ctx, t0);
+
+          const src = ctx.createBufferSource();
+          src.buffer = noiseBuffer(ctx, dur, "white");
+          const bp = ctx.createBiquadFilter();
+          bp.type = "bandpass";
+          bp.Q.value = 1.2;
+          bp.frequency.setValueAtTime(3200, t0);
+          bp.frequency.exponentialRampToValueAtTime(900, t0 + dur);
+          const g = ctx.createGain();
+          g.gain.setValueAtTime(0.0001, t0);
+          g.gain.exponentialRampToValueAtTime(gain, t0 + 0.008);
+          g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+          src.connect(bp); bp.connect(g); g.connect(master); src.start(t0);
+
+          const clack = ctx.createOscillator();
+          clack.type = "triangle";
+          clack.frequency.setValueAtTime(220, t0 + dur * 0.55);
+          clack.frequency.exponentialRampToValueAtTime(90, t0 + dur);
+          const cg = ctx.createGain();
+          cg.gain.setValueAtTime(0.0001, t0 + dur * 0.55);
+          cg.gain.exponentialRampToValueAtTime(gain * 0.25, t0 + dur * 0.58);
+          cg.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+          clack.connect(cg); cg.connect(master);
+          clack.start(t0 + dur * 0.55); clack.stop(t0 + dur + 0.02);
+        },
+      },
+      {
+        name: "Long corridor slide",
+        desc: "Extra-long shhhhh with slow pitch fall — hall door.",
+        play(ctx) {
+          const t0 = ctx.currentTime;
+          const dur = 1.05;
+          const gain = 0.14;
+          const master = masterOut(ctx, t0);
+
+          const src = ctx.createBufferSource();
+          src.buffer = noiseBuffer(ctx, dur, "pink");
+          const bp = ctx.createBiquadFilter();
+          bp.type = "bandpass";
+          bp.Q.value = 0.45;
+          bp.frequency.setValueAtTime(1800, t0);
+          bp.frequency.exponentialRampToValueAtTime(600, t0 + dur);
+          const g = ctx.createGain();
+          g.gain.setValueAtTime(0.0001, t0);
+          g.gain.exponentialRampToValueAtTime(gain, t0 + 0.05);
+          g.gain.exponentialRampToValueAtTime(gain * 0.5, t0 + 0.45);
+          g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+          src.connect(bp); bp.connect(g); g.connect(master); src.start(t0);
+
+          const hum = ctx.createOscillator();
+          hum.type = "sine";
+          hum.frequency.setValueAtTime(120, t0);
+          hum.frequency.linearRampToValueAtTime(80, t0 + dur);
+          const hg = ctx.createGain();
+          hg.gain.setValueAtTime(0.0001, t0);
+          hg.gain.exponentialRampToValueAtTime(gain * 0.15, t0 + 0.08);
+          hg.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+          hum.connect(hg); hg.connect(master);
+          hum.start(t0); hum.stop(t0 + dur + 0.02);
+        },
+      },
+      {
+        name: "Wet hydraulic",
+        desc: "Lower gurgly noise + hiss — more industrial, less dry air.",
+        play(ctx) {
+          const t0 = ctx.currentTime;
+          const dur = 0.6;
+          const gain = 0.16;
+          const master = masterOut(ctx, t0);
+
+          const src = ctx.createBufferSource();
+          src.buffer = noiseBuffer(ctx, dur, "brown");
+          const lp = ctx.createBiquadFilter();
+          lp.type = "lowpass";
+          lp.frequency.setValueAtTime(900, t0);
+          lp.frequency.exponentialRampToValueAtTime(400, t0 + dur);
+          const g = ctx.createGain();
+          g.gain.setValueAtTime(0.0001, t0);
+          g.gain.exponentialRampToValueAtTime(gain * 0.9, t0 + 0.04);
+          g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+          src.connect(lp); lp.connect(g); g.connect(master); src.start(t0);
+
+          const air = ctx.createBufferSource();
+          air.buffer = noiseBuffer(ctx, dur * 0.5, "pink");
+          const hp = ctx.createBiquadFilter();
+          hp.type = "highpass";
+          hp.frequency.value = 2000;
+          const ag = ctx.createGain();
+          ag.gain.setValueAtTime(0.0001, t0);
+          ag.gain.exponentialRampToValueAtTime(gain * 0.4, t0 + 0.02);
+          ag.gain.exponentialRampToValueAtTime(0.0001, t0 + dur * 0.5);
+          air.connect(hp); hp.connect(ag); ag.connect(master); air.start(t0);
+
+          const thump = ctx.createOscillator();
+          thump.type = "sine";
+          thump.frequency.setValueAtTime(85, t0);
+          thump.frequency.exponentialRampToValueAtTime(40, t0 + 0.12);
+          const tg = ctx.createGain();
+          tg.gain.setValueAtTime(0.0001, t0);
+          tg.gain.exponentialRampToValueAtTime(gain * 0.4, t0 + 0.01);
+          tg.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.14);
+          thump.connect(tg); tg.connect(master);
+          thump.start(t0); thump.stop(t0 + 0.15);
+        },
+      },
+      {
+        name: "Movie trailer SW",
+        desc: "Punchy attack, mid shhhh, slight stereo-ish dual layer (mono sum).",
+        play(ctx) {
+          const t0 = ctx.currentTime;
+          const dur = 0.58;
+          const gain = 0.19;
+          const master = masterOut(ctx, t0);
+
+          // punch
+          const punch = ctx.createOscillator();
+          punch.type = "sine";
+          punch.frequency.setValueAtTime(110, t0);
+          punch.frequency.exponentialRampToValueAtTime(45, t0 + 0.08);
+          const pg = ctx.createGain();
+          pg.gain.setValueAtTime(0.0001, t0);
+          pg.gain.exponentialRampToValueAtTime(gain * 0.5, t0 + 0.008);
+          pg.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.1);
+          punch.connect(pg); pg.connect(master);
+          punch.start(t0); punch.stop(t0 + 0.11);
+
+          // main hiss
+          const src = ctx.createBufferSource();
+          src.buffer = noiseBuffer(ctx, dur, "pink");
+          const bp = ctx.createBiquadFilter();
+          bp.type = "bandpass";
+          bp.Q.value = 0.6;
+          bp.frequency.setValueAtTime(2400, t0);
+          bp.frequency.exponentialRampToValueAtTime(1100, t0 + 0.2);
+          bp.frequency.exponentialRampToValueAtTime(650, t0 + dur);
+          const g = ctx.createGain();
+          g.gain.setValueAtTime(0.0001, t0);
+          g.gain.exponentialRampToValueAtTime(gain, t0 + 0.03);
+          g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+          src.connect(bp); bp.connect(g); g.connect(master); src.start(t0);
+
+          // air spit
+          const spit = ctx.createBufferSource();
+          spit.buffer = noiseBuffer(ctx, 0.2, "white");
+          const hp = ctx.createBiquadFilter();
+          hp.type = "highpass";
+          hp.frequency.value = 3500;
+          const sg = ctx.createGain();
+          sg.gain.setValueAtTime(0.0001, t0);
+          sg.gain.exponentialRampToValueAtTime(gain * 0.55, t0 + 0.01);
+          sg.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.18);
+          spit.connect(hp); hp.connect(sg); sg.connect(master); spit.start(t0);
+
+          // second panel ghost
+          const src2 = ctx.createBufferSource();
+          src2.buffer = noiseBuffer(ctx, dur * 0.75, "pink");
+          const bp2 = ctx.createBiquadFilter();
+          bp2.type = "bandpass";
+          bp2.frequency.setValueAtTime(1900, t0 + 0.05);
+          bp2.frequency.exponentialRampToValueAtTime(800, t0 + dur * 0.75);
+          const g2 = ctx.createGain();
+          g2.gain.setValueAtTime(0.0001, t0 + 0.05);
+          g2.gain.exponentialRampToValueAtTime(gain * 0.4, t0 + 0.08);
+          g2.gain.exponentialRampToValueAtTime(0.0001, t0 + dur * 0.75);
+          src2.connect(bp2); bp2.connect(g2); g2.connect(master); src2.start(t0 + 0.05);
+        },
+      },
+      {
+        name: "02 + quiet LP 06",
+        desc: "Death Star heavy attack, then quieter vacuum-rush tail with stronger low-pass.",
+        play(ctx) {
+          const t0 = ctx.currentTime;
+          const gain = 0.19;
+          const master = masterOut(ctx, t0);
+
+          // —— 02 start: deep thump + brown body + short pink spit ——
+          const thump = ctx.createOscillator();
+          thump.type = "triangle";
+          thump.frequency.setValueAtTime(70, t0);
+          thump.frequency.exponentialRampToValueAtTime(38, t0 + 0.14);
+          const tg = ctx.createGain();
+          tg.gain.setValueAtTime(0.0001, t0);
+          tg.gain.exponentialRampToValueAtTime(gain * 0.55, t0 + 0.012);
+          tg.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.18);
+          thump.connect(tg); tg.connect(master);
+          thump.start(t0); thump.stop(t0 + 0.2);
+
+          const bodyDur = 0.55;
+          const body = ctx.createBufferSource();
+          body.buffer = noiseBuffer(ctx, bodyDur, "brown");
+          const bodyLp = ctx.createBiquadFilter();
+          bodyLp.type = "lowpass";
+          bodyLp.frequency.setValueAtTime(1600, t0);
+          bodyLp.frequency.exponentialRampToValueAtTime(480, t0 + bodyDur);
+          const bg = ctx.createGain();
+          bg.gain.setValueAtTime(0.0001, t0);
+          bg.gain.exponentialRampToValueAtTime(gain, t0 + 0.04);
+          bg.gain.exponentialRampToValueAtTime(gain * 0.35, t0 + 0.28);
+          bg.gain.exponentialRampToValueAtTime(0.0001, t0 + bodyDur);
+          body.connect(bodyLp); bodyLp.connect(bg); bg.connect(master); body.start(t0);
+
+          const spit = ctx.createBufferSource();
+          spit.buffer = noiseBuffer(ctx, 0.35, "pink");
+          const spitBp = ctx.createBiquadFilter();
+          spitBp.type = "bandpass";
+          spitBp.Q.value = 0.7;
+          spitBp.frequency.setValueAtTime(2200, t0);
+          spitBp.frequency.exponentialRampToValueAtTime(900, t0 + 0.35);
+          const sg = ctx.createGain();
+          sg.gain.setValueAtTime(0.0001, t0);
+          sg.gain.exponentialRampToValueAtTime(gain * 0.32, t0 + 0.04);
+          sg.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.35);
+          spit.connect(spitBp); spitBp.connect(sg); sg.connect(master); spit.start(t0);
+
+          // —— quieter 06-style vacuum tail, earlier + milder LP ——
+          // was LP 1400→420 @ 0.22s; now 2400→900 starting at 0.05s
+          const tailStart = 0.05;
+          const tailDur = 0.85;
+          const tt = t0 + tailStart;
+          const tail = ctx.createBufferSource();
+          tail.buffer = noiseBuffer(ctx, tailDur, "white");
+          const tailBp = ctx.createBiquadFilter();
+          tailBp.type = "bandpass";
+          tailBp.Q.value = 0.4;
+          tailBp.frequency.setValueAtTime(350, tt);
+          tailBp.frequency.exponentialRampToValueAtTime(1800, tt + 0.14);
+          tailBp.frequency.exponentialRampToValueAtTime(550, tt + tailDur);
+
+          const tailLp = ctx.createBiquadFilter();
+          tailLp.type = "lowpass";
+          tailLp.frequency.setValueAtTime(2400, tt);
+          tailLp.frequency.exponentialRampToValueAtTime(900, tt + tailDur);
+          tailLp.Q.value = 0.55;
+
+          const tailGain = ctx.createGain();
+          // quieter than 06 (~0.45 of body peak)
+          const tGain = gain * 0.42;
+          tailGain.gain.setValueAtTime(0.0001, tt);
+          tailGain.gain.exponentialRampToValueAtTime(tGain, tt + 0.06);
+          tailGain.gain.linearRampToValueAtTime(tGain * 0.45, tt + 0.4);
+          tailGain.gain.exponentialRampToValueAtTime(0.0001, tt + tailDur);
+
+          tail.connect(tailBp);
+          tailBp.connect(tailLp);
+          tailLp.connect(tailGain);
+          tailGain.connect(master);
+          tail.start(tt);
+        },
+      },
+      {
+        name: "Long hiss open→dark LP",
+        desc: "Current ship idea: short thump + long tail, LP none→strong (~250Hz).",
+        play(ctx) {
+          const t0 = ctx.currentTime;
+          const gain = 0.18;
+          const master = masterOut(ctx, t0);
+          const nyquist = ctx.sampleRate * 0.5;
+
+          const thump = ctx.createOscillator();
+          thump.type = "triangle";
+          thump.frequency.setValueAtTime(70, t0);
+          thump.frequency.exponentialRampToValueAtTime(38, t0 + 0.1);
+          const tg = ctx.createGain();
+          tg.gain.setValueAtTime(0.0001, t0);
+          tg.gain.exponentialRampToValueAtTime(gain * 0.5, t0 + 0.01);
+          tg.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.12);
+          thump.connect(tg); tg.connect(master);
+          thump.start(t0); thump.stop(t0 + 0.14);
+
+          const tailDur = 0.95;
+          const src = ctx.createBufferSource();
+          src.buffer = noiseBuffer(ctx, tailDur, "white");
+          const bp = ctx.createBiquadFilter();
+          bp.type = "bandpass";
+          bp.Q.value = 0.4;
+          bp.frequency.setValueAtTime(500, t0);
+          bp.frequency.exponentialRampToValueAtTime(1600, t0 + 0.12);
+          bp.frequency.exponentialRampToValueAtTime(500, t0 + tailDur);
+          const lp = ctx.createBiquadFilter();
+          lp.type = "lowpass";
+          lp.frequency.setValueAtTime(nyquist, t0);
+          lp.frequency.exponentialRampToValueAtTime(250, t0 + tailDur);
+          const g = ctx.createGain();
+          g.gain.setValueAtTime(0.0001, t0);
+          g.gain.exponentialRampToValueAtTime(gain * 0.45, t0 + 0.04);
+          g.gain.exponentialRampToValueAtTime(0.0001, t0 + tailDur);
+          src.connect(bp); bp.connect(lp); lp.connect(g); g.connect(master); src.start(t0);
+        },
+      },
+      {
+        name: "Tone hatch A (sine glide)",
+        desc: "Mostly tonal: low sine door note + soft noise veil, long decay.",
+        play(ctx) {
+          const t0 = ctx.currentTime;
+          const dur = 1.05;
+          const master = masterOut(ctx, t0);
+
+          const osc = ctx.createOscillator();
+          osc.type = "sine";
+          osc.frequency.setValueAtTime(110, t0);
+          osc.frequency.exponentialRampToValueAtTime(165, t0 + 0.2);
+          osc.frequency.exponentialRampToValueAtTime(82, t0 + dur);
+          const og = ctx.createGain();
+          og.gain.setValueAtTime(0.0001, t0);
+          og.gain.exponentialRampToValueAtTime(0.14, t0 + 0.04);
+          og.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+          osc.connect(og); og.connect(master);
+          osc.start(t0); osc.stop(t0 + dur + 0.02);
+
+          const harm = ctx.createOscillator();
+          harm.type = "sine";
+          harm.frequency.setValueAtTime(220, t0);
+          harm.frequency.exponentialRampToValueAtTime(165, t0 + dur);
+          const hg = ctx.createGain();
+          hg.gain.setValueAtTime(0.0001, t0);
+          hg.gain.exponentialRampToValueAtTime(0.05, t0 + 0.08);
+          hg.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+          harm.connect(hg); hg.connect(master);
+          harm.start(t0); harm.stop(t0 + dur + 0.02);
+
+          const air = ctx.createBufferSource();
+          air.buffer = noiseBuffer(ctx, dur * 0.7, "pink");
+          const lp = ctx.createBiquadFilter();
+          lp.type = "lowpass";
+          lp.frequency.setValueAtTime(ctx.sampleRate * 0.5, t0);
+          lp.frequency.exponentialRampToValueAtTime(400, t0 + dur * 0.7);
+          const ag = ctx.createGain();
+          ag.gain.setValueAtTime(0.0001, t0);
+          ag.gain.exponentialRampToValueAtTime(0.06, t0 + 0.05);
+          ag.gain.exponentialRampToValueAtTime(0.0001, t0 + dur * 0.7);
+          air.connect(lp); lp.connect(ag); ag.connect(master); air.start(t0);
+        },
+      },
+      {
+        name: "Tone hatch B (fifth stack)",
+        desc: "Two sines a fifth apart, long swell-out; tiny hiss under.",
+        play(ctx) {
+          const t0 = ctx.currentTime;
+          const dur = 1.15;
+          const master = masterOut(ctx, t0);
+          const f = 98;
+
+          [[f, 0.12], [f * 1.5, 0.07], [f * 2, 0.04]].forEach(([freq, peak], i) => {
+            const o = ctx.createOscillator();
+            o.type = "sine";
+            o.frequency.setValueAtTime(freq, t0);
+            o.frequency.exponentialRampToValueAtTime(freq * 0.92, t0 + dur);
+            const g = ctx.createGain();
+            g.gain.setValueAtTime(0.0001, t0);
+            g.gain.linearRampToValueAtTime(peak, t0 + 0.05 + i * 0.03);
+            g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+            o.connect(g); g.connect(master);
+            o.start(t0); o.stop(t0 + dur + 0.02);
+          });
+
+          const air = ctx.createBufferSource();
+          air.buffer = noiseBuffer(ctx, 0.85, "white");
+          const bp = ctx.createBiquadFilter();
+          bp.type = "bandpass";
+          bp.frequency.setValueAtTime(1200, t0);
+          bp.frequency.exponentialRampToValueAtTime(500, t0 + 0.85);
+          const lp = ctx.createBiquadFilter();
+          lp.type = "lowpass";
+          lp.frequency.setValueAtTime(ctx.sampleRate * 0.5, t0);
+          lp.frequency.exponentialRampToValueAtTime(280, t0 + 0.85);
+          const ag = ctx.createGain();
+          ag.gain.setValueAtTime(0.0001, t0);
+          ag.gain.exponentialRampToValueAtTime(0.055, t0 + 0.06);
+          ag.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.85);
+          air.connect(bp); bp.connect(lp); lp.connect(ag); ag.connect(master); air.start(t0);
+        },
+      },
+      {
+        name: "Long vacuum + sub tone",
+        desc: "Extended decompress hiss with a low sine undercurrent.",
+        play(ctx) {
+          const t0 = ctx.currentTime;
+          const dur = 1.2;
+          const master = masterOut(ctx, t0);
+
+          const sub = ctx.createOscillator();
+          sub.type = "sine";
+          sub.frequency.setValueAtTime(55, t0);
+          sub.frequency.exponentialRampToValueAtTime(42, t0 + dur);
+          const sg = ctx.createGain();
+          sg.gain.setValueAtTime(0.0001, t0);
+          sg.gain.exponentialRampToValueAtTime(0.09, t0 + 0.05);
+          sg.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+          sub.connect(sg); sg.connect(master);
+          sub.start(t0); sub.stop(t0 + dur + 0.02);
+
+          const src = ctx.createBufferSource();
+          src.buffer = noiseBuffer(ctx, dur, "white");
+          const bp = ctx.createBiquadFilter();
+          bp.type = "bandpass";
+          bp.Q.value = 0.35;
+          bp.frequency.setValueAtTime(400, t0);
+          bp.frequency.exponentialRampToValueAtTime(2800, t0 + 0.15);
+          bp.frequency.exponentialRampToValueAtTime(450, t0 + dur);
+          const lp = ctx.createBiquadFilter();
+          lp.type = "lowpass";
+          lp.frequency.setValueAtTime(ctx.sampleRate * 0.5, t0);
+          lp.frequency.exponentialRampToValueAtTime(300, t0 + dur);
+          const g = ctx.createGain();
+          g.gain.setValueAtTime(0.0001, t0);
+          g.gain.exponentialRampToValueAtTime(0.12, t0 + 0.06);
+          g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+          src.connect(bp); bp.connect(lp); lp.connect(g); g.connect(master); src.start(t0);
+        },
+      },
+      {
+        name: "Glass ring + long air",
+        desc: "Bright glass-ish sine ping, then long quiet air tail.",
+        play(ctx) {
+          const t0 = ctx.currentTime;
+          const master = masterOut(ctx, t0);
+
+          const ring = ctx.createOscillator();
+          ring.type = "sine";
+          ring.frequency.setValueAtTime(880, t0);
+          ring.frequency.exponentialRampToValueAtTime(640, t0 + 0.55);
+          const rg = ctx.createGain();
+          rg.gain.setValueAtTime(0.0001, t0);
+          rg.gain.exponentialRampToValueAtTime(0.1, t0 + 0.015);
+          rg.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.55);
+          ring.connect(rg); rg.connect(master);
+          ring.start(t0); ring.stop(t0 + 0.57);
+
+          const ring2 = ctx.createOscillator();
+          ring2.type = "sine";
+          ring2.frequency.setValueAtTime(1320, t0);
+          const r2g = ctx.createGain();
+          r2g.gain.setValueAtTime(0.0001, t0);
+          r2g.gain.exponentialRampToValueAtTime(0.04, t0 + 0.02);
+          r2g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.35);
+          ring2.connect(r2g); r2g.connect(master);
+          ring2.start(t0); ring2.stop(t0 + 0.37);
+
+          const tailDur = 1.0;
+          const air = ctx.createBufferSource();
+          air.buffer = noiseBuffer(ctx, tailDur, "pink");
+          const lp = ctx.createBiquadFilter();
+          lp.type = "lowpass";
+          lp.frequency.setValueAtTime(ctx.sampleRate * 0.5, t0);
+          lp.frequency.exponentialRampToValueAtTime(350, t0 + tailDur);
+          const ag = ctx.createGain();
+          ag.gain.setValueAtTime(0.0001, t0);
+          ag.gain.exponentialRampToValueAtTime(0.07, t0 + 0.08);
+          ag.gain.exponentialRampToValueAtTime(0.0001, t0 + tailDur);
+          air.connect(lp); lp.connect(ag); ag.connect(master); air.start(t0);
+        },
+      },
+      {
+        name: "Deep tone door (no noise)",
+        desc: "Pure tone stack only — soft attack, very long fade. No hiss.",
+        play(ctx) {
+          const t0 = ctx.currentTime;
+          const dur = 1.35;
+          const master = masterOut(ctx, t0);
+          const root = 73;
+          [1, 2, 3].forEach((mult, i) => {
+            const o = ctx.createOscillator();
+            o.type = "sine";
+            o.frequency.setValueAtTime(root * mult, t0);
+            o.frequency.exponentialRampToValueAtTime(root * mult * 0.97, t0 + dur);
+            const g = ctx.createGain();
+            const peak = 0.11 / mult;
+            g.gain.setValueAtTime(0.0001, t0);
+            g.gain.linearRampToValueAtTime(peak, t0 + 0.08 + i * 0.04);
+            g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+            o.connect(g); g.connect(master);
+            o.start(t0); o.stop(t0 + dur + 0.02);
+          });
+        },
+      },
+      {
+        name: "Ship live hybrid (short)",
+        desc: "Mirrors live door.js: short body + mid tail, open→strong LP.",
+        play(ctx) {
+          const t0 = ctx.currentTime;
+          const gain = 0.18;
+          const master = masterOut(ctx, t0);
+          const nyquist = ctx.sampleRate * 0.5;
+
+          const thump = ctx.createOscillator();
+          thump.type = "triangle";
+          thump.frequency.setValueAtTime(70, t0);
+          thump.frequency.exponentialRampToValueAtTime(38, t0 + 0.1);
+          const tg = ctx.createGain();
+          tg.gain.setValueAtTime(0.0001, t0);
+          tg.gain.exponentialRampToValueAtTime(gain * 0.55, t0 + 0.01);
+          tg.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.12);
+          thump.connect(tg); tg.connect(master);
+          thump.start(t0); thump.stop(t0 + 0.14);
+
+          const body = ctx.createBufferSource();
+          body.buffer = noiseBuffer(ctx, 0.28, "brown");
+          const bodyLp = ctx.createBiquadFilter();
+          bodyLp.type = "lowpass";
+          bodyLp.frequency.setValueAtTime(1500, t0);
+          bodyLp.frequency.exponentialRampToValueAtTime(500, t0 + 0.28);
+          const bg = ctx.createGain();
+          bg.gain.setValueAtTime(0.0001, t0);
+          bg.gain.exponentialRampToValueAtTime(gain, t0 + 0.025);
+          bg.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.28);
+          body.connect(bodyLp); bodyLp.connect(bg); bg.connect(master); body.start(t0);
+
+          const tailDur = 0.38;
+          const tt = t0 + 0.02;
+          const tail = ctx.createBufferSource();
+          tail.buffer = noiseBuffer(ctx, tailDur, "white");
+          const bp = ctx.createBiquadFilter();
+          bp.type = "bandpass";
+          bp.Q.value = 0.4;
+          bp.frequency.setValueAtTime(400, tt);
+          bp.frequency.exponentialRampToValueAtTime(1700, tt + 0.08);
+          bp.frequency.exponentialRampToValueAtTime(600, tt + tailDur);
+          const lp = ctx.createBiquadFilter();
+          lp.type = "lowpass";
+          lp.frequency.setValueAtTime(nyquist, tt);
+          lp.frequency.exponentialRampToValueAtTime(320, tt + tailDur);
+          const g = ctx.createGain();
+          g.gain.setValueAtTime(0.0001, tt);
+          g.gain.exponentialRampToValueAtTime(gain * 0.4, tt + 0.03);
+          g.gain.exponentialRampToValueAtTime(0.0001, tt + tailDur);
+          tail.connect(bp); bp.connect(lp); lp.connect(g); g.connect(master); tail.start(tt);
+        },
+      },
+      {
+        name: "09 + 08 (gradual LP)",
+        desc: "09 + 08 same start; 08 quieter; LP ramps in fast on the 08 layer.",
+        play(ctx) {
+          const t0 = ctx.currentTime;
+          const master = masterOut(ctx, t0);
+          const nyquist = ctx.sampleRate * 0.5;
+          const gain = 0.16;
+
+          // —— 09 wet hydraulic ——
+          const thump = ctx.createOscillator();
+          thump.type = "sine";
+          thump.frequency.setValueAtTime(85, t0);
+          thump.frequency.exponentialRampToValueAtTime(40, t0 + 0.12);
+          const tg = ctx.createGain();
+          tg.gain.setValueAtTime(0.0001, t0);
+          tg.gain.exponentialRampToValueAtTime(gain * 0.45, t0 + 0.01);
+          tg.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.14);
+          thump.connect(tg); tg.connect(master);
+          thump.start(t0); thump.stop(t0 + 0.15);
+
+          const wetDur = 0.55;
+          const wet = ctx.createBufferSource();
+          wet.buffer = noiseBuffer(ctx, wetDur, "brown");
+          const wetLp = ctx.createBiquadFilter();
+          wetLp.type = "lowpass";
+          wetLp.frequency.setValueAtTime(900, t0);
+          wetLp.frequency.exponentialRampToValueAtTime(400, t0 + wetDur);
+          const wg = ctx.createGain();
+          wg.gain.setValueAtTime(0.0001, t0);
+          wg.gain.exponentialRampToValueAtTime(gain * 0.9, t0 + 0.04);
+          wg.gain.exponentialRampToValueAtTime(0.0001, t0 + wetDur);
+          wet.connect(wetLp); wetLp.connect(wg); wg.connect(master); wet.start(t0);
+
+          const spit = ctx.createBufferSource();
+          spit.buffer = noiseBuffer(ctx, wetDur * 0.45, "pink");
+          const hp = ctx.createBiquadFilter();
+          hp.type = "highpass";
+          hp.frequency.value = 2000;
+          const sg = ctx.createGain();
+          sg.gain.setValueAtTime(0.0001, t0);
+          sg.gain.exponentialRampToValueAtTime(gain * 0.35, t0 + 0.02);
+          sg.gain.exponentialRampToValueAtTime(0.0001, t0 + wetDur * 0.45);
+          spit.connect(hp); hp.connect(sg); sg.connect(master); spit.start(t0);
+
+          // —— 08 long corridor (same start), quieter, fast LP ramp ——
+          const slideDur = 1.05;
+          const slide = ctx.createBufferSource();
+          slide.buffer = noiseBuffer(ctx, slideDur, "pink");
+          const bp = ctx.createBiquadFilter();
+          bp.type = "bandpass";
+          bp.Q.value = 0.45;
+          bp.frequency.setValueAtTime(1800, t0);
+          bp.frequency.exponentialRampToValueAtTime(600, t0 + slideDur);
+
+          const slideLp = ctx.createBiquadFilter();
+          slideLp.type = "lowpass";
+          // open → strong LP quickly (~0.28s), then hold dark for rest of tail
+          slideLp.frequency.setValueAtTime(nyquist, t0);
+          slideLp.frequency.exponentialRampToValueAtTime(360, t0 + 0.28);
+          slideLp.frequency.setValueAtTime(360, t0 + 0.28);
+          slideLp.frequency.exponentialRampToValueAtTime(280, t0 + slideDur);
+          slideLp.Q.value = 0.55;
+
+          const slg = ctx.createGain();
+          slg.gain.setValueAtTime(0.0001, t0);
+          slg.gain.exponentialRampToValueAtTime(gain * 0.38, t0 + 0.06);
+          slg.gain.exponentialRampToValueAtTime(gain * 0.18, t0 + 0.45);
+          slg.gain.exponentialRampToValueAtTime(0.0001, t0 + slideDur);
+
+          slide.connect(bp);
+          bp.connect(slideLp);
+          slideLp.connect(slg);
+          slg.connect(master);
+          slide.start(t0);
+
+          const hum = ctx.createOscillator();
+          hum.type = "sine";
+          hum.frequency.setValueAtTime(120, t0);
+          hum.frequency.linearRampToValueAtTime(80, t0 + slideDur);
+          const hg = ctx.createGain();
+          hg.gain.setValueAtTime(0.0001, t0);
+          hg.gain.exponentialRampToValueAtTime(gain * 0.07, t0 + 0.08);
+          hg.gain.exponentialRampToValueAtTime(0.0001, t0 + slideDur);
+          hum.connect(hg); hg.connect(master);
+          hum.start(t0); hum.stop(t0 + slideDur + 0.02);
+        },
+      },
+    ];
+
+    const grid = document.getElementById("grid");
+    const status = document.getElementById("status");
+
+    VARIANTS.forEach((v, i) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "sfx";
+      btn.innerHTML =
+        `<span class="num">${String(i + 1).padStart(2, "0")}</span>` +
+        `<span class="name">${v.name}</span>` +
+        `<span class="desc">${v.desc}</span>`;
+      btn.addEventListener("click", async () => {
+        await resumeAudio();
+        const ctx = getAudioCtx();
+        if (!ctx) {
+          status.textContent = "AudioContext not available in this browser.";
+          return;
+        }
+        status.textContent = `Playing ${i + 1} — ${v.name}`;
+        try {
+          v.play(ctx);
+        } catch (err) {
+          status.textContent = `Error: ${err?.message || err}`;
+        }
+      });
+      grid.appendChild(btn);
+    });
+  </script>
+</body>
+</html>

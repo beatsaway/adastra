@@ -1,7 +1,12 @@
 import * as THREE from "three";
-import { buildShip, createSpaceView, updateAutoDoors, updateStallDoors, nearestInteractable, updateSittingCrew, updatePatrolCrew, updatePlants, downgradeMaterialsForMobile } from "./ship.js";
+import { buildShip, createSpaceView, createStatusView, updateAutoDoors, updateStallDoors, nearestInteractable, nearestLockedDoor, LOCKED_DOOR_LINES, updateSosLights, updatePlants, downgradeMaterialsForMobile } from "./ship.js?v=20260815m";
 import { Player } from "./player.js";
 import { isTouchDevice, setupMobileControls } from "./mobile.js";
+import { HudPrompt } from "./hud-prompt.js";
+import { ShipScenes, SCENE } from "./scenes.js";
+import { shipVoice } from "./ai-voice.js";
+import { createAiDrone } from "./ai-drone.js";
+import { ShipAmbience, ProximityTransformerHum, playDoorOpen, playDoorClose, playDoorDenied, playDoorAuth, resumeAudio, playYearReveal, playYearCollapse, playYearHover, playYearPick } from "../sfx/index.js";
 
 const loaderEl = document.getElementById("loader");
 const loadBar = document.getElementById("load-bar");
@@ -10,11 +15,51 @@ const loadStatus = document.getElementById("load-status");
 const overlay = document.getElementById("overlay");
 const hud = document.getElementById("hud");
 const promptEl = document.getElementById("prompt");
+const yearFlashEl = document.getElementById("year-flash");
 const startBtn = document.getElementById("start-btn");
 const helpBtn = document.getElementById("help-btn");
-const hintEl = document.getElementById("hint");
+const displayOpt = document.getElementById("display-opt");
 const mobileRoot = document.getElementById("mobile-controls");
 const touchMode = isTouchDevice();
+
+function isAppFullscreen() {
+  return !!(
+    document.fullscreenElement ||
+    document.webkitFullscreenElement ||
+    document.msFullscreenElement
+  );
+}
+
+function requestAppFullscreen() {
+  const el = document.documentElement;
+  const req =
+    el.requestFullscreen ||
+    el.webkitRequestFullscreen ||
+    el.webkitRequestFullScreen ||
+    el.msRequestFullscreen;
+  if (!req) return;
+  try {
+    const p = req.call(el);
+    if (p && typeof p.catch === "function") p.catch(() => {});
+  } catch (_) {}
+}
+
+function exitAppFullscreen() {
+  const exit =
+    document.exitFullscreen ||
+    document.webkitExitFullscreen ||
+    document.msExitFullscreen;
+  if (!exit) return;
+  try {
+    const p = exit.call(document);
+    if (p && typeof p.catch === "function") p.catch(() => {});
+  } catch (_) {}
+}
+
+function syncDisplayOptLabel() {
+  if (!displayOpt) return;
+  displayOpt.textContent = isAppFullscreen() ? "Window" : "Fullscreen";
+}
 
 function setProgress(pct, status) {
   const p = Math.max(0, Math.min(100, Math.round(pct)));
@@ -36,8 +81,8 @@ function toggleMainScreen(ship) {
     mesh.material = ud.outsideMat;
     ud.deco.visible = false;
   } else {
-    mesh.material = ud.defaultMat;
-    ud.deco.visible = true;
+    mesh.material = ud.statusMat || ud.defaultMat;
+    ud.deco.visible = false;
   }
 }
 
@@ -47,10 +92,11 @@ async function boot() {
 
   setProgress(18, "Loading…");
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0xd8dde4);
-  scene.fog = new THREE.Fog(0xd8dde4, 40, 90);
+  scene.background = new THREE.Color(0x1c0c0c);
+  scene.fog = new THREE.Fog(0x1c0c0c, 35, 85);
 
   const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.08, 120);
+  scene.add(camera);
   // Mobile GPUs choke on pixel count + PBR far more than desktop; Roblox is native C++ with batching/LOD.
   const mobileQuality = touchMode;
   const renderer = new THREE.WebGLRenderer({
@@ -58,7 +104,7 @@ async function boot() {
     powerPreference: mobileQuality ? "high-performance" : "default",
     stencil: false,
   });
-  renderer.setPixelRatio(Math.min(devicePixelRatio, mobileQuality ? 1.25 : 2));
+  renderer.setPixelRatio(Math.min(devicePixelRatio, mobileQuality ? 1 : 2));
   renderer.setSize(innerWidth, innerHeight);
   renderer.shadowMap.enabled = false;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -67,12 +113,12 @@ async function boot() {
     renderer.toneMappingExposure = 1.05;
   } else {
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.2;
+    renderer.toneMappingExposure = 1.15;
   }
   document.body.appendChild(renderer.domElement);
 
-  scene.add(new THREE.AmbientLight(0xffffff, 0.72));
-  const hemi = new THREE.HemisphereLight(0xffffff, 0xb0b8c4, 0.85);
+  scene.add(new THREE.AmbientLight(0xff6060, 0.35));
+  const hemi = new THREE.HemisphereLight(0xff9090, 0x401010, 0.45);
   scene.add(hemi);
 
   setProgress(35, "Loading…");
@@ -93,19 +139,26 @@ async function boot() {
     if (ship.mainScreen?.userData?.screenMesh) {
       ship.mainScreen.userData.defaultMat = ship.mainScreen.userData.screenMesh.material;
     }
+    // Live material after downgrade (SOS / neon must not write orphan Standard mats)
+    if (ship.anim?.hubNeon && ship.hubBeacon?.core?.material) {
+      ship.anim.hubNeon.holo = ship.hubBeacon.core.material;
+    }
   }
 
   const screenW = ship.mainScreen.userData.width || 6.5;
   const screenH = ship.mainScreen.userData.height || 2.6;
   const spaceView = createSpaceView(renderer, screenW / screenH);
+  const statusView = createStatusView(screenW / screenH);
   ship.mainScreen.userData.outsideMat = spaceView.material;
+  ship.mainScreen.userData.statusMat = statusView.material;
+  ship.mainScreen.userData.statusView = statusView;
   ship.spaceView = spaceView;
 
-  // default main screen to starfield view
+  // default main screen: AI status briefing (not outside)
   {
     const ud = ship.mainScreen.userData;
-    ud.mode = "outside";
-    ud.screenMesh.material = ud.outsideMat;
+    ud.mode = "default";
+    ud.screenMesh.material = ud.statusMat;
     ud.deco.visible = false;
   }
 
@@ -113,6 +166,7 @@ async function boot() {
   await wait(40);
 
   const player = new Player(camera, ship.colliders, ship.spawn);
+  if (ship.spawnYaw != null) player.yaw = ship.spawnYaw;
   setProgress(86, "Loading…");
 
   spaceView.update(0, renderer);
@@ -154,51 +208,176 @@ async function boot() {
   const clock = new THREE.Clock();
   let skipDeltas = 2;
 
+  const hudPrompt = new HudPrompt(promptEl, { touchMode });
+  const scenes = new ShipScenes({ player });
+  const ambience = new ShipAmbience();
+  const boxHum = new ProximityTransformerHum();
+  const aiDrone = createAiDrone(camera, { touchMode });
+
+  function roomAtPlayer() {
+    const zones = ship.zones;
+    if (!zones) return null;
+    const x = player.position.x;
+    const z = player.position.z;
+    for (let i = 0; i < zones.length; i++) {
+      const b = zones[i]?.bounds;
+      if (!b) continue;
+      if (x >= b.minX && x <= b.maxX && z >= b.minZ && z <= b.maxZ) return zones[i];
+    }
+    return null;
+  }
+
+  function beginScene1() {
+    // Snap to cockpit corner facing the main screen (not door-center)
+    player.position.copy(ship.spawn);
+    player.position.y = player.eye;
+    const yaw = ship.spawnYaw ?? Math.PI;
+    player.yaw = yaw;
+    player.pitch = -0.12;
+    // While script plays: keep view on the big screen (can't turn to the door)
+    player.setLookLimits({
+      yawCenter: yaw,
+      yawRange: 0.55,
+      pitchMin: -0.5,
+      pitchMax: 0.12,
+    });
+    player.update(0);
+    scenes.start(SCENE.COCKPIT_BRIEFING);
+    const ud = ship.mainScreen.userData;
+    ud.mode = "default";
+    ud.screenMesh.material = ud.statusMat || ud.defaultMat;
+    ud.deco.visible = false;
+  }
+
+  function syncScene1FromBriefing() {
+    const status = ship.mainScreen.userData.statusView;
+    if (!scenes.isActive(SCENE.COCKPIT_BRIEFING)) return;
+    if (status?.complete) {
+      scenes.end(SCENE.COCKPIT_BRIEFING);
+      player.setLookLimits(null);
+    }
+  }
+
+  function nearMainScreen() {
+    const dx = player.position.x - ship.interactPos.x;
+    const dz = player.position.z - ship.interactPos.z;
+    return Math.hypot(dx, dz) < 5.6;
+  }
+
+  function nearHubBeacon() {
+    const b = ship.hubBeacon;
+    if (!b) return false;
+    const dx = player.position.x - b.position.x;
+    const dz = player.position.z - b.position.z;
+    return Math.hypot(dx, dz) < (b.radius || 2.85);
+  }
+
+  const yearRaycaster = new THREE.Raycaster();
+  const yearNdc = new THREE.Vector2(0, 0);
+  /** Sticky AI line while standing at a sealed door (reroll when leaving / switching doors). */
+  let lockedDoorKey = null;
+  let lockedDoorLine = null;
+  let wasHubNear = false;
+  /** @type {object | null} */
+  let lastAimedYear = null;
+
+  /** Crosshair centre (desktop) or tap point (mobile) → year pick + flash transit. */
+  let yearTransit = null;
+  function tryOpenYearByAim(clientX, clientY) {
+    const hub = ship.hubBeacon;
+    if (!hub?.pickYearByRay || !player.locked) return false;
+    if (yearTransit || hub.getPickedYear?.()) return true;
+    if ((hub.expand || 0) < 0.45) return false;
+    if (clientX == null || clientY == null) {
+      yearNdc.set(0, 0);
+    } else {
+      const rect = renderer.domElement.getBoundingClientRect();
+      yearNdc.set(
+        ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
+        -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1
+      );
+    }
+    const hit = hub.pickYearByRay(camera, yearRaycaster, yearNdc);
+    if (!hit?.href) return false;
+    if (!hub.beginYearPick?.(hit)) return true;
+    playYearPick();
+    yearTransit = { href: hit.href, elapsed: 0, phase: "spin" };
+    return true;
+  }
+
+  function updateYearTransit(dt) {
+    if (!yearTransit) return;
+    yearTransit.elapsed += dt;
+    if (yearTransit.phase === "spin" && yearTransit.elapsed >= 1) {
+      yearTransit.phase = "flash";
+      yearTransit.elapsed = 0;
+      yearFlashEl?.classList.add("on");
+    } else if (yearTransit.phase === "flash" && yearTransit.elapsed >= 0.48) {
+      const href = yearTransit.href;
+      yearTransit = null;
+      window.location.href = href;
+    }
+  }
+
+  function tryStartBriefingByProximity() {
+    const ud = ship.mainScreen.userData;
+    if (ud.mode !== "default" || !ud.statusView?.needsAlertStart?.()) return false;
+    if (!nearMainScreen()) return false;
+    ud.statusView.beginBriefing();
+    hudPrompt.clearDialogue("ai-brief");
+    hudPrompt.refresh();
+    return true;
+  }
+
   function doInteract() {
+    if (hudPrompt.activateDialogue()) return;
+
+    const ud = ship.mainScreen.userData;
+    if (
+      nearMainScreen() &&
+      ud.mode === "default" &&
+      ud.statusView?.hasUnfinishedDialogue?.()
+    ) {
+      return;
+    }
+
     if (!player.locked) return;
     const stall = nearestInteractable(ship.interactables, player.position);
     if (stall) {
       stall.toggle();
       return;
     }
-    const dx = player.position.x - ship.interactPos.x;
-    const dz = player.position.z - ship.interactPos.z;
-    if (Math.hypot(dx, dz) < 7.5) toggleMainScreen(ship);
+    if (nearMainScreen()) toggleMainScreen(ship);
   }
 
   const mobile = touchMode
     ? setupMobileControls({
       player,
-      onInteract: doInteract,
       root: mobileRoot,
     })
     : null;
-
-  if (touchMode) {
-    hintEl.classList.add("mobile-help");
-    hintEl.innerHTML =
-      "<strong>Mobile controls</strong>" +
-      "Left circle — move<br>" +
-      "Right circle — look<br>" +
-      "Sprint — hold to run<br>" +
-      "E — interact";
-    const keysEl = overlay.querySelector(".keys");
-    if (keysEl) {
-      keysEl.innerHTML =
-        "Left stick · Right stick look<br>Sprint · E to interact · ? for help";
-    }
-  }
 
   function enter() {
     overlay.classList.add("hidden");
     hud.classList.remove("hidden");
     skipDeltas = 3;
     clock.getDelta();
+    void shipVoice.ensureCtx();
+    void resumeAudio().then(() => {
+      ambience.start();
+      void boxHum.ensure();
+    });
+    // Enter Ship → Scene 1 (cockpit lockdown until briefing completes)
+    beginScene1();
+    ship.mainScreen.userData.statusView?.start?.();
+    // If the script was already finished earlier, Scene 1 ends immediately
+    syncScene1FromBriefing();
+    displayOpt?.classList.add("hidden");
+    requestAppFullscreen();
+    syncDisplayOptLabel();
     if (touchMode) {
       player.setLocked(true);
       mobile?.show();
-      // show controls once so mobile players learn the layout
-      hintEl.classList.remove("hidden");
     } else {
       renderer.domElement.requestPointerLock();
     }
@@ -206,23 +385,59 @@ async function boot() {
 
   startBtn.addEventListener("click", enter);
   let lastHelpToggle = 0;
-  const toggleHelp = (e) => {
+  const toggleDisplayMenu = (e) => {
     e.preventDefault();
     e.stopPropagation();
     const now = performance.now();
     if (now - lastHelpToggle < 450) return;
     lastHelpToggle = now;
-    hintEl.classList.toggle("hidden");
+    if (!displayOpt) return;
+    syncDisplayOptLabel();
+    displayOpt.classList.toggle("hidden");
   };
-  helpBtn.addEventListener("pointerup", toggleHelp);
-  renderer.domElement.addEventListener("click", () => {
-    if (overlay.classList.contains("hidden") && loaderEl.classList.contains("hidden")) {
-      if (!touchMode) {
-        hintEl.classList.add("hidden");
-        renderer.domElement.requestPointerLock();
-      }
+  helpBtn?.addEventListener("pointerup", toggleDisplayMenu);
+  displayOpt?.addEventListener("pointerup", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (isAppFullscreen()) exitAppFullscreen();
+    else requestAppFullscreen();
+    setTimeout(syncDisplayOptLabel, 80);
+  });
+  document.addEventListener("fullscreenchange", syncDisplayOptLabel);
+  document.addEventListener("webkitfullscreenchange", syncDisplayOptLabel);
+
+  renderer.domElement.addEventListener("click", (e) => {
+    if (!overlay.classList.contains("hidden") || !loaderEl.classList.contains("hidden")) {
+      return;
+    }
+    if (player.locked) {
+      const opened = touchMode
+        ? tryOpenYearByAim(e.clientX, e.clientY)
+        : tryOpenYearByAim(null, null);
+      if (opened) return;
+    }
+    if (!touchMode) {
+      displayOpt?.classList.add("hidden");
+      renderer.domElement.requestPointerLock();
     }
   });
+
+  // Mobile: tap year mesh (avoid steal from on-screen sticks / E button)
+  if (touchMode) {
+    renderer.domElement.addEventListener(
+      "pointerup",
+      (e) => {
+        if (!player.locked) return;
+        if (e.target !== renderer.domElement) return;
+        if (mobileRoot && !mobileRoot.classList.contains("hidden")) {
+          const t = e.target;
+          if (t && mobileRoot.contains(t)) return;
+        }
+        tryOpenYearByAim(e.clientX, e.clientY);
+      },
+      { passive: true }
+    );
+  }
 
   document.addEventListener("pointerlockchange", () => {
     if (touchMode) return;
@@ -235,6 +450,17 @@ async function boot() {
 
   let eHeld = false;
   window.addEventListener("keydown", (e) => {
+    if (e.code === "KeyR" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      const ud = ship.mainScreen.userData;
+      ud.statusView?.reset?.();
+      ud.mode = "default";
+      ud.screenMesh.material = ud.statusMat || ud.defaultMat;
+      ud.deco.visible = false;
+      // Replay hook (dev): restart Scene 1
+      beginScene1();
+      return;
+    }
     if (e.code !== "KeyE") return;
     if (eHeld) return;
     eHeld = true;
@@ -273,10 +499,10 @@ async function boot() {
       r.rotation.y = t * 0.8;
       r.rotation.x = Math.sin(t * 0.5) * 0.2;
     }
-    if (anim.hubNeon) {
+    if (anim.hubNeon && !anim.sosActive) {
       const hn = anim.hubNeon;
       hn.color.setHSL((t * 0.12) % 1, 0.95, 0.48);
-      if (hn.holo) hn.holo.emissive.copy(hn.color);
+      if (hn.holo?.emissive) hn.holo.emissive.copy(hn.color);
       hn.light.color.copy(hn.color);
       if (hn.floor) {
         // darker floor than ceiling / accents
@@ -308,7 +534,7 @@ async function boot() {
       anim.blinkers[i].material.emissiveIntensity = Math.sin(t * 6 + i) > 0 ? 1.2 : 0.15;
     }
     // engine orange: pulse between saturated orange and lighter orange
-    if (anim.enginePipes?.length) {
+    if (!anim.sosActive && anim.enginePipes?.length) {
       const pulse = (Math.sin(t * 2.4) + 1) * 0.5;
       // normal (pulse=0): richer #ff7a18 · light (pulse=1): softer #ffc878
       const r = 1;
@@ -341,10 +567,87 @@ async function boot() {
     const t = clock.elapsedTime;
     frame += 1;
     player.update(dt);
-    updateAutoDoors(ship.autoDoors, player.position, dt);
+    scenes.update();
+    syncScene1FromBriefing();
+    updateYearTransit(dt);
+    {
+      const hudUp = !!promptEl && !promptEl.classList.contains("hidden");
+      const speaking = shipVoice.speaking;
+      // Show above HUD whenever the text box is up, or while any script audio plays
+      aiDrone.update(dt, camera, {
+        active: player.locked && (hudUp || speaking),
+        vol: shipVoice.tickViz(dt),
+        t,
+      });
+    }
+    {
+      const hubNear = nearHubBeacon();
+      const hub = ship.hubBeacon;
+      hub?.update?.(dt, hubNear, t, camera);
+      if (player.locked && !yearTransit) {
+        if (hubNear && !wasHubNear) playYearReveal();
+        if (!hubNear && wasHubNear) playYearCollapse();
+      }
+      wasHubNear = hubNear;
+      // PC: look-aim highlight (skip while year exit is playing)
+      if (
+        !yearTransit &&
+        !mobileQuality &&
+        hubNear &&
+        player.locked &&
+        hub?.setAimedYear &&
+        hub.expand > 0.45
+      ) {
+        yearNdc.set(0, 0);
+        const hit = hub.pickYearByRay(camera, yearRaycaster, yearNdc);
+        if (hit !== lastAimedYear) {
+          if (hit) playYearHover();
+          lastAimedYear = hit;
+        }
+        hub.setAimedYear(hit);
+      } else if (!yearTransit && (mobileQuality || !hubNear)) {
+        if (lastAimedYear) lastAimedYear = null;
+        hub?.setAimedYear?.(null);
+      }
+    }
+    // Scene 1 / pre-enter: keep doors sealed (silent). Open-hole frames never get panels/SFX.
+    const doorsSealed =
+      scenes.isActive(SCENE.COCKPIT_BRIEFING) || !player.locked;
+    updateAutoDoors(
+      ship.autoDoors,
+      player.position,
+      dt,
+      doorsSealed,
+      (kind, door) => {
+        if (!door?.hasPanel) return;
+        if (kind === "open") {
+          playDoorAuth();
+          setTimeout(() => playDoorOpen(), 90);
+        } else playDoorClose();
+      }
+    );
+    // Room ambience: SOS vs normal, smooth 0.4s blend inside ShipAmbience
+    {
+      const room = roomAtPlayer();
+      const sosHere = room ? room.lightMode === "sos" : !!ship.anim?.sosActive;
+      ambience.setSos(sosHere);
+      ambience.update(dt);
+      // Transformer hum when very close to cockpit wall power boxes
+      let boxDist = 99;
+      const boxes = ship.powerBoxes;
+      if (boxes) {
+        for (let i = 0; i < boxes.length; i++) {
+          const b = boxes[i];
+          const d = Math.hypot(player.position.x - b.x, player.position.z - b.z);
+          if (d < boxDist) boxDist = d;
+        }
+      }
+      boxHum.update(dt, boxDist);
+    }
     updateStallDoors(ship.interactables, dt);
-    updateSittingCrew(ship.anim.sittingCrew, dt, t, player.position, mobileQuality ? 24 : 40);
-    updatePatrolCrew(ship.anim.patrolCrew, dt, t, player.position, mobileQuality ? 28 : 45);
+    if (ship.anim.sosActive && (!mobileQuality || (frame & 1) === 0)) {
+      updateSosLights(ship.anim.sosRooms, t, ship.anim.hubNeon);
+    }
     updatePlants(ship.anim, t);
     // deco only when near animated areas; throttle harder on mobile
     const px = player.position.x;
@@ -357,7 +660,9 @@ async function boot() {
       animateDeco(t);
     }
 
-    if (ship.mainScreen.userData.mode === "outside") {
+    if (ship.mainScreen.userData.mode === "default") {
+      ship.mainScreen.userData.statusView?.update?.(dt);
+    } else if (ship.mainScreen.userData.mode === "outside") {
       const sdx = player.position.x - ship.interactPos.x;
       const sdz = player.position.z - ship.interactPos.z;
       const nearScreen = Math.hypot(sdx, sdz) < 22;
@@ -370,25 +675,64 @@ async function boot() {
     if (labelTimer > 0.2) {
       labelTimer = 0;
 
-      const stall = nearestInteractable(ship.interactables, player.position);
-      if (stall && player.locked) {
-        const p = stall.prompt();
-        promptEl.textContent = touchMode ? p.replace(/^Press E/, "Tap E") : p;
-        promptEl.classList.remove("hidden");
+      const ud = ship.mainScreen.userData;
+      const near = nearMainScreen();
+      const status = ud.statusView;
+
+      // Walk up to the big screen → auto-start Scene 1 briefing (no click)
+      if (player.locked && near) tryStartBriefingByProximity();
+
+      const unfinished =
+        ud.mode === "default" && status?.hasUnfinishedDialogue?.();
+
+      // 1) Dialogue claims — briefing only (Info Hub has no HUD welcome)
+      if (unfinished && near) {
+        hudPrompt.setDialogue({ id: "ai-brief", text: null });
+        hudPrompt.clearDialogue("info-hub");
       } else {
-        const dx = player.position.x - ship.interactPos.x;
-        const dz = player.position.z - ship.interactPos.z;
-        const near = Math.hypot(dx, dz) < 7.5;
-        if (near && player.locked) {
-          const mode = ship.mainScreen.userData.mode;
-          promptEl.textContent = mode === "default"
-            ? (touchMode ? "Tap E · See outside" : "Press E · See outside")
-            : (touchMode ? "Tap E · See stats" : "Press E · See stats");
-          promptEl.classList.remove("hidden");
+        hudPrompt.clearDialogue("ai-brief");
+        hudPrompt.clearDialogue("info-hub");
+      }
+
+      // 2) Nearby interaction — only when dialogue does not own the box
+      let nearby = null;
+      let nearbyTap = null;
+      if (player.locked && !hudPrompt.hasDialogue) {
+        const sealed = nearestLockedDoor(ship.autoDoors, player.position);
+        if (sealed) {
+          if (sealed.key !== lockedDoorKey) {
+            lockedDoorKey = sealed.key;
+            lockedDoorLine =
+              LOCKED_DOOR_LINES[(Math.random() * LOCKED_DOOR_LINES.length) | 0];
+            playDoorDenied();
+            // Small gap after digital deny before VO (don't overlap)
+            const line = lockedDoorLine;
+            setTimeout(() => shipVoice.trySpeak(line), 320);
+          }
+          nearby = lockedDoorLine;
         } else {
-          promptEl.classList.add("hidden");
+          lockedDoorKey = null;
+          lockedDoorLine = null;
+          const stall = nearestInteractable(ship.interactables, player.position);
+          if (stall) {
+            const p = stall.prompt();
+            nearby = touchMode ? p.replace(/^Press E/, "Tap") : p;
+            nearbyTap = () => doInteract();
+          } else if (near) {
+            nearby =
+              ud.mode === "default"
+                ? touchMode
+                  ? "See outside"
+                  : "Press E · See outside"
+                : touchMode
+                  ? "Open console"
+                  : "Press E · See console";
+            nearbyTap = () => doInteract();
+          }
         }
       }
+      hudPrompt.setNearby(nearby, touchMode ? nearbyTap : null);
+      hudPrompt.refresh();
     }
 
     renderer.render(scene, camera);

@@ -55,6 +55,7 @@ export class Player {
     this.lookStickX = 0;
     this.lookStickY = 0;
     this.mobileSprint = false;
+    this.lookLimits = null;
     this._euler = new THREE.Euler(0, 0, 0, "YXZ");
     this._onMove = this._onMove.bind(this);
 
@@ -83,6 +84,29 @@ export class Player {
   look(dx, dy) {
     this.yaw -= dx * 0.0022;
     this.pitch -= dy * 0.0022;
+    this._applyLookLimits();
+  }
+
+  /**
+   * Optional camera cone (e.g. Scene 1 facing the big screen).
+   * @param {{ yawCenter: number, yawRange: number, pitchMin?: number, pitchMax?: number } | null} limits
+   */
+  setLookLimits(limits) {
+    this.lookLimits = limits || null;
+    this._applyLookLimits();
+  }
+
+  _applyLookLimits() {
+    if (this.lookLimits) {
+      const { yawCenter, yawRange, pitchMin = -1.35, pitchMax = 1.35 } = this.lookLimits;
+      let d = this.yaw - yawCenter;
+      while (d > Math.PI) d -= Math.PI * 2;
+      while (d < -Math.PI) d += Math.PI * 2;
+      d = Math.max(-yawRange, Math.min(yawRange, d));
+      this.yaw = yawCenter + d;
+      this.pitch = Math.max(pitchMin, Math.min(pitchMax, this.pitch));
+      return;
+    }
     this.pitch = Math.max(-1.35, Math.min(1.35, this.pitch));
     // Keep yaw finite; wrap does not limit turn range (full 360+ still works)
     if (this.yaw > Math.PI || this.yaw < -Math.PI) {
