@@ -2580,9 +2580,9 @@ function layCrewInBed(bed, scale = 0.38) {
   const av = createCrewAvatar(scale);
   const mattressTop = 0.56;
   const halfThick = 0.26 * scale;
-  // Head toward pillow (local -Z); face up after +X pitch
-  av.position.set(0, mattressTop + halfThick, 0.08);
-  av.rotation.x = Math.PI / 2;
+  // Head toward pillow (local -Z). +X pitch put heads at the foot — use -X.
+  av.position.set(0, mattressTop + halfThick, -0.2);
+  av.rotation.x = -Math.PI / 2;
   av.rotation.z = (Math.random() - 0.5) * 0.12;
 
   const { head, leftArm, rightArm, leftLeg, rightLeg, faceScreen, body } = av.userData;
@@ -6180,14 +6180,15 @@ export function buildShip(scene) {
   toilets.add(box(sinkW * 0.92, 1.05, 0.04, mirrorFrame, sinkX, 1.95, -4.28));
   toilets.add(box(sinkW * 0.86, 0.95, 0.03, mirrorGlass, sinkX, 1.95, -4.25));
   const mirrorAnchor = new THREE.Object3D();
-  mirrorAnchor.position.set(sinkX, 1.95, -4.25);
+  // Face into the washroom (+Z) so debug text sits in front of the glass
+  mirrorAnchor.position.set(sinkX, 1.95, -4.22);
   toilets.add(mirrorAnchor);
   registerWallMonitor(anim, toilets, mirrorAnchor, {
     screenMat: mirrorGlass,
     barMats: [],
     ringMats: [],
     underGlowMat: mirrorFrame,
-  }, { maxW: sinkW * 0.82, maxH: 0.88, z: 0.006 });
+  }, { maxW: 1.75, maxH: 0.75, z: 0.04, y: -0.22 });
   styleRoomLighting(toilets, "hygiene");
   enableSos(toilets, anim);
 
