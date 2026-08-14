@@ -2066,6 +2066,29 @@ function enableSos(room, anim) {
   if (anim?.sosRooms) anim.sosRooms.push(room);
 }
 
+function queueLinkedSosRestore(anim, rooms, except) {
+  if (!anim) return;
+  if (!anim.pendingSosRestore) anim.pendingSosRestore = [];
+  const q = anim.pendingSosRestore;
+  for (let i = 0; i < (rooms || []).length; i++) {
+    const linked = rooms[i];
+    if (!linked || linked === except) continue;
+    if (linked.userData?.lightMode !== "sos") continue;
+    if (q.indexOf(linked) < 0) q.push(linked);
+  }
+}
+
+/** Restore one queued SOS room per call (avoids a multi-room shader hitch). */
+export function pumpPendingSosRestore(anim) {
+  const q = anim?.pendingSosRestore;
+  if (!q?.length) return;
+  const room = q.shift();
+  if (room?.userData?.lightMode === "sos") {
+    clearSosLighting(room, null);
+  }
+  syncShipSosActive(anim);
+}
+
 /** Restore a room from SOS after all its wall monitors are debugged. */
 export function clearSosLighting(room, anim = null) {
   if (!room?.userData) return;
@@ -2173,22 +2196,14 @@ export function clearSosLighting(room, anim = null) {
     }
   }
 
-  // Hub is the spine: clearing it also restores corridors + crew deck (no monitors there)
+  // Hub is the spine: corridors + crew deck restore on following frames
   if (kind === "hub" && anim?.hubLinkedSosRooms?.length) {
-    for (const linked of anim.hubLinkedSosRooms) {
-      if (linked && linked !== room && linked.userData?.lightMode === "sos") {
-        clearSosLighting(linked, null);
-      }
-    }
+    queueLinkedSosRestore(anim, anim.hubLinkedSosRooms, room);
   }
 
   // Cockpit clear also restores the north corridor (its red light spills into the cockpit)
   if (kind === "control" && anim?.cockpitLinkedSosRooms?.length) {
-    for (const linked of anim.cockpitLinkedSosRooms) {
-      if (linked && linked !== room && linked.userData?.lightMode === "sos") {
-        clearSosLighting(linked, null);
-      }
-    }
+    queueLinkedSosRestore(anim, anim.cockpitLinkedSosRooms, room);
   }
 
   if (anim) syncShipSosActive(anim);
@@ -2271,24 +2286,25 @@ function syncDebugHoloVisibility(wm) {
 }
 
 /** Clickable SOS text on wall monitors (same idea as door unlock holos). */
-function makeDebugMonitorHolo(maxW = 1.6, maxH = 0.85) {
+function makeDebugMonitorHolo(maxW = 1.6, maxH = 0.85, opts = {}) {
   const lines = ["Debug", "with " + MONITOR_DEBUG_COST + " data points"];
+  const prominent = !!opts.prominent;
   const orange = makeHoloLinesTexture(lines, {
     fill: "#ff9944",
     shadow: "rgba(200, 80, 20, 0.9)",
-    fontPx: 44,
+    fontPx: prominent ? 52 : 44,
   });
   const bright = makeHoloLinesTexture(lines, {
     fill: "#ffe0a8",
     shadow: "rgba(255, 160, 60, 0.95)",
-    fontPx: 44,
+    fontPx: prominent ? 52 : 44,
   });
   const aspect = Math.max(0.5, orange.aspect || 1.6);
   // Compact label — lower third of the monitor, stay inside the face
-  let planeH = Math.min(maxH * 0.36, 0.4);
+  let planeH = Math.min(maxH * (prominent ? 0.62 : 0.36), prominent ? 0.58 : 0.4);
   let planeW = planeH * aspect;
-  const maxPlaneW = Math.max(0.28, maxW * 0.58);
-  const maxPlaneH = Math.max(0.16, maxH * 0.34);
+  const maxPlaneW = Math.max(0.28, maxW * (prominent ? 0.72 : 0.58));
+  const maxPlaneH = Math.max(0.16, maxH * (prominent ? 0.55 : 0.34));
   if (planeW > maxPlaneW) {
     planeW = maxPlaneW;
     planeH = planeW / aspect;
@@ -2314,7 +2330,7 @@ function makeDebugMonitorHolo(maxW = 1.6, maxH = 0.85) {
     new THREE.PlaneGeometry(planeW, planeH),
     mat
   );
-  plane.renderOrder = 1;
+  plane.renderOrder = prominent ? 3 : 1;
   plane.userData.debugHolo = true;
   plane.userData.baseMap = orange.tex;
   plane.userData.hoverMap = bright.tex;
@@ -2330,7 +2346,7 @@ function attachDebugHoloToMonitor(wm, opts = {}) {
   // Coplanar with screen face; sit in the lower part of the panel
   const z = opts.z ?? 0.081;
   const y = opts.y != null ? opts.y : -maxH * 0.3;
-  const holo = makeDebugMonitorHolo(maxW, maxH);
+  const holo = makeDebugMonitorHolo(maxW, maxH, opts);
   holo.position.set(opts.x ?? 0, y, z);
   if (opts.rotY) holo.rotation.y = opts.rotY;
   wm.group.add(holo);
@@ -2355,6 +2371,7 @@ export function resetAllRoomSos(anim) {
     applyWallMonitorVisual(wm);
   }
   anim.sosActive = true;
+  anim.pendingSosRestore = [];
 }
 
 function monitorIdForRoom(room) {
@@ -2494,6 +2511,25 @@ function saturateColorHSL(color, satMul = 1.65) {
   return color;
 }
 
+function armShoulderPos(scale, side) {
+  return {
+    x: (side === "left" ? -0.43 : 0.43) * scale,
+    y: 0.48 * scale,
+    z: 0,
+  };
+}
+
+function makeAvatarArm(scale, material, side) {
+  const w = 0.26 * scale;
+  const h = 0.78 * scale;
+  const mesh = extrudeRoundedLimb(w, h, 0.28 * scale, 0.08 * scale, material);
+  const outX = side === "left" ? -w * 0.5 : w * 0.5;
+  mesh.geometry.translate(outX, -h * 0.5, 0);
+  const p = armShoulderPos(scale, side);
+  mesh.position.set(p.x, p.y, p.z);
+  return mesh;
+}
+
 function createCrewAvatar(scale = 0.44) {
   const group = new THREE.Group();
   const skin = randomBrightColor();
@@ -2540,11 +2576,8 @@ function createCrewAvatar(scale = 0.44) {
   group.userData.body = body;
 
   // limbs — boxy but soft round corners (bevel so rounding shows on all edges)
-  const leftArm = extrudeRoundedLimb(0.26 * scale, 0.78 * scale, 0.28 * scale, 0.08 * scale, bodyMat);
-  const rightArm = leftArm.clone();
-  rightArm.material = bodyMat;
-  leftArm.position.set(-0.58 * scale, 0.1 * scale, 0);
-  rightArm.position.set(0.58 * scale, 0.1 * scale, 0);
+  const leftArm = makeAvatarArm(scale, bodyMat, "left");
+  const rightArm = makeAvatarArm(scale, bodyMat, "right");
   group.add(leftArm, rightArm);
 
   const leftLeg = extrudeRoundedLimb(0.3 * scale, 0.66 * scale, 0.3 * scale, 0.12 * scale, legMat);
@@ -2622,6 +2655,93 @@ function seatCrewAtChair(room, x, z, rotY = 0, scale = 0.44) {
   return av;
 }
 
+const WORK_SEATS = Object.create(null);
+
+function registerWorkSeat(npcId, room, localX, localZ, rotY, floorY = 0) {
+  WORK_SEATS[npcId] = {
+    x: (room?.position?.x || 0) + localX,
+    z: (room?.position?.z || 0) + localZ,
+    y: floorY || 0,
+    rotY: rotY || 0,
+  };
+}
+
+function sitWorldPose(seat, scale) {
+  const rotY = seat.rotY || 0;
+  const floorY = seat.y || 0;
+  const seatTop = 0.49 + floorY;
+  const bodyBottom = -0.375 * scale;
+  const sitY = seatTop - bodyBottom - 0.02;
+  const forward = 0.12;
+  return {
+    x: seat.x + Math.sin(rotY) * forward,
+    z: seat.z + Math.cos(rotY) * forward,
+    y: sitY,
+    rotY,
+    seatTop,
+  };
+}
+
+function poseNpcSit(av, seat) {
+  if (!av || !seat) return;
+  const scale = av.userData.sleepScale || 0.4;
+  const pose = sitWorldPose(seat, scale);
+  const rotY = pose.rotY;
+  const seatTop = pose.seatTop;
+  const sitY = pose.y;
+  av.position.set(pose.x, pose.y, pose.z);
+  av.rotation.set(0, rotY, 0);
+  const { head, leftLeg, rightLeg, leftArm, rightArm, faceScreen } = av.userData;
+  if (leftLeg && rightLeg) {
+    leftLeg.rotation.set(-Math.PI / 2, 0, 0);
+    rightLeg.rotation.set(-Math.PI / 2, 0, 0);
+    const thighHalfH = 0.15 * scale;
+    const legY = seatTop + thighHalfH - sitY;
+    const legZ = 0.28 * scale;
+    leftLeg.position.set(-0.2 * scale, legY, legZ);
+    rightLeg.position.set(0.2 * scale, legY, legZ);
+  }
+  const armBaseX = -0.95;
+  if (leftArm) {
+    leftArm.rotation.set(armBaseX, 0, 0);
+    const p = armShoulderPos(scale, "left");
+    leftArm.position.set(p.x, p.y, 0.08 * scale);
+  }
+  if (rightArm) {
+    rightArm.rotation.set(armBaseX, 0, 0);
+    const p = armShoulderPos(scale, "right");
+    rightArm.position.set(p.x, p.y, 0.08 * scale);
+  }
+  if (head) head.rotation.set(0, 0, 0);
+  if (faceScreen?.material) faceScreen.material.emissiveIntensity = 0.85;
+  if (av.userData.body) av.userData.body.scale.y = 1;
+  av.userData.state = "sitting";
+  av.userData.sit = {
+    armBaseX,
+    armPhase: Math.random() * Math.PI * 2,
+    nextArm: 0.8 + Math.random() * 2.5,
+    nextHead: 0.2 + Math.random() * 0.7,
+    nodReturn: null,
+    armL: 0,
+    armR: 0,
+    armTargetL: 0,
+    armTargetR: 0,
+    headX: 0,
+    headY: 0,
+    headZ: 0,
+    headTargetX: 0,
+    headTargetY: 0,
+    headTargetZ: 0,
+    baseRotY: rotY,
+    seatX: pose.x,
+    seatZ: pose.z,
+    sitY,
+    attnRadius: 1.7,
+    nearHold: 0,
+    farHold: 0,
+  };
+}
+
 /**
  * Inactive sleeper in a bunk — parented to the bed so rotY follows the pod.
  * No attention / patrol; barely breathes until activated.
@@ -2630,16 +2750,32 @@ const CREW_ROSTER = [
   { id: "nova", name: "Nova Chen", role: "helm officer", duty: "I'll take the cockpit helm.", work: "cockpit" },
   { id: "rex", name: "Rex Vale", role: "comms specialist", duty: "I'll staff the bridge consoles.", work: "cockpit" },
   { id: "mira", name: "Mira Sol", role: "archive keeper", duty: "I'll watch the Info Hub.", work: "hub" },
-  { id: "jun", name: "Jun Park", role: "botanist", duty: "I'll tend hydroponics.", work: "garden" },
+  { id: "jun", name: "Jun Park", role: "botanist", duty: "I'll tend the hydroponic garden.", work: "garden" },
   { id: "tess", name: "Tess Orin", role: "chef", duty: "I'll get the diner running.", work: "kitchen" },
   { id: "kai", name: "Kai Holt", role: "reactor tech", duty: "I'll report to the engine room.", work: "engine" },
   { id: "lila", name: "Lila Voss", role: "hygiene officer", duty: "I'll take the washroom watch.", work: "washroom" },
   { id: "aden", name: "Aden Ruiz", role: "deck medic", duty: "I'll stay on crew deck.", work: "crewDeck" },
 ];
 
+function resetNpcLimbLayout(av) {
+  const scale = av.userData.sleepScale || 0.4;
+  const { leftArm, rightArm, leftLeg, rightLeg } = av.userData;
+  if (leftArm) {
+    const p = armShoulderPos(scale, "left");
+    leftArm.position.set(p.x, p.y, p.z);
+  }
+  if (rightArm) {
+    const p = armShoulderPos(scale, "right");
+    rightArm.position.set(p.x, p.y, p.z);
+  }
+  if (leftLeg) leftLeg.position.set(-0.2 * scale, -0.67 * scale, 0);
+  if (rightLeg) rightLeg.position.set(0.2 * scale, -0.67 * scale, 0);
+}
+
 function poseSleeperLie(av, scale) {
   const mattressTop = 0.56;
   const halfThick = 0.26 * scale;
+  resetNpcLimbLayout(av);
   av.position.set(0, mattressTop + halfThick, -0.2);
   av.rotation.set(-Math.PI / 2, 0, (Math.random() - 0.5) * 0.12);
   const { head, leftArm, rightArm, leftLeg, rightLeg, faceScreen } = av.userData;
@@ -2683,6 +2819,8 @@ function layCrewInBed(bed, spec, scale = 0.4) {
     phase: Math.random() * Math.PI * 2,
     baseY: av.position.y,
     body: av.userData.body,
+    hovering: false,
+    hoverT: 0,
   };
   av.userData.bed = bed;
   bed.userData.sleeper = av;
@@ -2718,17 +2856,19 @@ function workPathFor(work, aisle, npcId = "") {
   const engDoor = { x: 0, z: -12.55 };
   const engineDoor = { x: 0, z: -19.55 };
   const viaHub = [dormLane, dormDoor, deck, deckNorth, southCorrN, hub];
-  const helm = npcId === "rex" ? { x: -3.4, z: 19.15 } : { x: 3.4, z: 19.15 };
   const routes = {
-    cockpit: [...viaHub, hubNorth, cockDoor, helm],
+    cockpit: [...viaHub, hubNorth, cockDoor],
     hub: [...viaHub, { x: 2.6, z: 4.5 }],
     garden: [...viaHub, gardenDoor, { x: -6.35, z: 8.6 }],
-    kitchen: [...viaHub, kitchenDoor, { x: 9.4, z: 1.7 }],
-    engine: [dormLane, dormDoor, deck, engDoor, engineDoor, { x: 5.5, z: -22.4 }],
+    kitchen: [...viaHub, kitchenDoor, { x: 7.4, z: 2.5 }],
+    engine: [dormLane, dormDoor, deck, engDoor, engineDoor, { x: 6.2, z: -21.2 }],
     washroom: [dormLane, dormDoor, deck, washDoor, { x: 13.1, z: -10.25 }],
     crewDeck: [dormLane, dormDoor, { x: -3.8, z: -10.25 }],
   };
-  return compactWalkPath([aisle, ...(routes[work] || routes.crewDeck)]);
+  const pts = [aisle, ...(routes[work] || routes.crewDeck)];
+  const seat = WORK_SEATS[npcId];
+  if (seat) pts.push({ x: seat.x, z: seat.z });
+  return compactWalkPath(pts);
 }
 
 function aisleWorldFromBed(bed) {
@@ -2741,6 +2881,7 @@ function aisleWorldFromBed(bed) {
 
 function poseNpcStand(av, worldX, worldZ, yaw = 0) {
   const scale = av.userData.sleepScale || 0.4;
+  resetNpcLimbLayout(av);
   av.position.set(worldX, scale, worldZ);
   av.rotation.set(0, yaw, 0);
   const { head, leftArm, rightArm, leftLeg, rightLeg, faceScreen } = av.userData;
@@ -2757,26 +2898,70 @@ function attachNpcToRoot(av, root) {
   if (!av || !root || av.parent === root) return;
   av.updateWorldMatrix(true, false);
   const pos = new THREE.Vector3();
+  const quat = new THREE.Quaternion();
   av.getWorldPosition(pos);
+  av.getWorldQuaternion(quat);
   root.add(av);
   av.position.copy(pos);
+  av.quaternion.copy(quat);
 }
 
-/** Wake a sleeper: stand in the aisle, wave, talk, then walk the corridor path to work. */
+function captureLimbEulers(av) {
+  const { head, leftArm, rightArm, leftLeg, rightLeg } = av.userData;
+  const grab = (o) => (o ? { x: o.rotation.x, y: o.rotation.y, z: o.rotation.z } : null);
+  return {
+    head: grab(head),
+    leftArm: grab(leftArm),
+    rightArm: grab(rightArm),
+    leftLeg: grab(leftLeg),
+    rightLeg: grab(rightLeg),
+    face: av.userData.faceScreen?.material?.emissiveIntensity ?? 0.15,
+  };
+}
+
+function lerpLimbsToStand(av, from, u) {
+  if (!from) return;
+  const apply = (o, src) => {
+    if (!o || !src) return;
+    o.rotation.x = src.x * (1 - u);
+    o.rotation.y = src.y * (1 - u);
+    o.rotation.z = src.z * (1 - u);
+  };
+  apply(av.userData.head, from.head);
+  apply(av.userData.leftArm, from.leftArm);
+  apply(av.userData.rightArm, from.rightArm);
+  apply(av.userData.leftLeg, from.leftLeg);
+  apply(av.userData.rightLeg, from.rightLeg);
+  if (av.userData.faceScreen?.material) {
+    av.userData.faceScreen.material.emissiveIntensity = from.face + (0.85 - from.face) * u;
+  }
+}
+
+/** Wake a sleeper: tween from the bunk to the aisle, wave, talk, then walk to work. */
 export function beginNpcWake(av, root) {
   if (!av || av.userData.state === "awake" || av.userData.state === "waking") return false;
   const bed = av.userData.bed;
   if (bed?.userData?.podClosed) toggleBedPod(bed);
+  if (av.userData.sleep) av.userData.sleep.hovering = false;
+  const fromLimbs = captureLimbEulers(av);
   attachNpcToRoot(av, root);
   const aisle = aisleWorldFromBed(bed);
   const bedWorld = new THREE.Vector3();
   bed.getWorldPosition(bedWorld);
   const yaw = Math.atan2(aisle.x - bedWorld.x, aisle.z - bedWorld.z);
-  poseNpcStand(av, aisle.x, aisle.z, yaw);
+  const scale = av.userData.sleepScale || 0.4;
   av.userData.state = "waking";
   av.userData.sleep = null;
   av.userData.wake = {
-    phase: "wave",
+    phase: "rise",
+    riseT: 0,
+    riseDur: 0.95,
+    fromPos: av.position.clone(),
+    toPos: new THREE.Vector3(aisle.x, scale, aisle.z),
+    fromQuat: av.quaternion.clone(),
+    toQuat: new THREE.Quaternion().setFromEuler(new THREE.Euler(0, yaw, 0)),
+    standYaw: yaw,
+    fromLimbs,
     t: 2.4,
     path: workPathFor(av.userData.npcWork, aisle, av.userData.npcId),
     wp: 0,
@@ -2794,19 +2979,25 @@ function placeNpcAtWork(av, root) {
   const aisle = aisleWorldFromBed(av.userData.bed);
   const path = workPathFor(av.userData.npcWork, aisle, av.userData.npcId);
   const last = path[path.length - 1];
-  poseNpcStand(av, last.x, last.z, 0);
-  av.userData.state = "awake";
+  const seat = WORK_SEATS[av.userData.npcId];
   av.userData.sleep = null;
-  av.userData.wake = {
-    phase: "work",
-    t: 1 + Math.random() * 2,
-    path,
-    wp: path.length,
-    phaseWalk: Math.random() * Math.PI * 2,
-    workHome: last,
-    workTarget: { x: last.x, z: last.z },
-    spoke: true,
-  };
+  if (seat) {
+    poseNpcSit(av, seat);
+    av.userData.wake = { phase: "seated", path, wp: path.length, spoke: true };
+  } else {
+    poseNpcStand(av, last.x, last.z, 0);
+    av.userData.state = "awake";
+    av.userData.wake = {
+      phase: "work",
+      t: 1 + Math.random() * 2,
+      path,
+      wp: path.length,
+      phaseWalk: Math.random() * Math.PI * 2,
+      workHome: last,
+      workTarget: { x: last.x, z: last.z },
+      spoke: true,
+    };
+  }
   const bed = av.userData.bed;
   if (bed) {
     bed.userData.podClosed = false;
@@ -2848,6 +3039,8 @@ export function resetSleepingCrew(anim, root) {
       phase: Math.random() * Math.PI * 2,
       baseY: av.position.y,
       body: av.userData.body,
+      hovering: false,
+      hoverT: 0,
     };
     markSleeperMeshes(av);
     bed.userData.podClosed = true;
@@ -2858,22 +3051,29 @@ export function resetSleepingCrew(anim, root) {
   }
 }
 
-/** Soft idle breathe for sleeping bunk crew (very cheap). */
+/** Soft idle breathe for sleeping bunk crew; hover lifts them off the mattress. */
 const _avWorld = new THREE.Vector3();
-export function updateSleepingCrew(crew, t, playerPos = null, maxDist = 22) {
+export function updateSleepingCrew(crew, t, playerPos = null, maxDist = 22, dt = 1 / 60) {
   if (!crew?.length) return;
   const maxD2 = maxDist * maxDist;
+  const step = Math.max(0, Math.min(0.05, dt || 0));
   for (let i = 0; i < crew.length; i++) {
     const av = crew[i];
     if (av.userData.state !== "sleeping") continue;
     const s = av.userData.sleep;
     if (!s) continue;
-    if (playerPos) {
+    if (s.hovering) s.hoverT = Math.min(1, (s.hoverT || 0) + step * 0.42);
+    else s.hoverT = Math.max(0, (s.hoverT || 0) - step * 1.15);
+    const ht = s.hoverT || 0;
+    const liftN = ht * ht * (3 - 2 * ht);
+    const podClosed = !!av.userData.bed?.userData?.podClosed;
+    const lift = liftN * (podClosed ? 0.3 : 0.46);
+    if (playerPos && ht < 0.001) {
       av.getWorldPosition(_avWorld);
       if (_avWorld.distanceToSquared(playerPos) > maxD2) continue;
     }
     const breathe = Math.sin(t * 1.1 + s.phase) * 0.008;
-    av.position.y = s.baseY + breathe;
+    av.position.y = s.baseY + breathe + lift;
     if (s.body) {
       s.body.scale.y = 1 + breathe * 2.2;
     }
@@ -2882,25 +3082,159 @@ export function updateSleepingCrew(crew, t, playerPos = null, maxDist = 22) {
 
 const _wakeFwd = new THREE.Vector3();
 
+/** Pause at a sliding hatch until it is open enough to walk through. */
+function npcWaitForDoor(av, target, autoDoors) {
+  if (!av || !target || !autoDoors?.length) return false;
+  const ax = av.position.x;
+  const az = av.position.z;
+  const tdx = target.x - ax;
+  const tdz = target.z - az;
+  const tlen = Math.hypot(tdx, tdz);
+  if (tlen < 0.05) return false;
+  for (let i = 0; i < autoDoors.length; i++) {
+    const d = autoDoors[i];
+    if (!d?.hasPanel || d.locked) continue;
+    const dx = d.trigger.x - ax;
+    const dz = d.trigger.z - az;
+    const dist = Math.hypot(dx, dz);
+    if (dist > 1.5 || dist < 0.14) continue;
+    const align = (tdx * dx + tdz * dz) / (tlen * dist);
+    if (align < 0.35) continue;
+    if ((d.open || 0) < 0.78) return true;
+  }
+  return false;
+}
+
+function wrapPi(a) {
+  while (a > Math.PI) a -= Math.PI * 2;
+  while (a < -Math.PI) a += Math.PI * 2;
+  return a;
+}
+
+const WAKE_ACK_RADIUS = 1.7;
+const WAKE_ACK_ENTER = 0.3;
+const WAKE_ACK_EXIT = 0.3;
+
+/**
+ * Patrol (walk/work) only: stand still, twist a little toward the captain,
+ * then finish the look with the head. Does not spin to face the player.
+ */
+function updateWakeAcknowledge(av, w, playerPos, dt, t, standY) {
+  const head = av.userData.head;
+  const { leftArm, rightArm, leftLeg, rightLeg, body } = av.userData;
+  let dx = 0;
+  let dz = 0;
+  let dist = Infinity;
+  if (playerPos) {
+    av.getWorldPosition(_avWorld);
+    dx = playerPos.x - _avWorld.x;
+    dz = playerPos.z - _avWorld.z;
+    dist = Math.hypot(dx, dz);
+  }
+  const near = dist < WAKE_ACK_RADIUS && dist > 0.08;
+
+  if (near) {
+    w.ackFar = 0;
+    w.ackNear = (w.ackNear || 0) + dt;
+    if (w.ackNear >= WAKE_ACK_ENTER && !w.ack) {
+      w.ack = true;
+      w.ackBaseYaw = av.rotation.y;
+    }
+  } else {
+    w.ackNear = 0;
+    if (w.ack) {
+      w.ackFar = (w.ackFar || 0) + dt;
+      if (w.ackFar >= WAKE_ACK_EXIT) w.ack = false;
+    }
+  }
+
+  if (!w.ack) {
+    const k = Math.min(1, 5 * dt);
+    if (head) {
+      head.rotation.y += (0 - head.rotation.y) * k;
+      head.rotation.x += (0 - head.rotation.x) * k;
+      head.rotation.z += (0 - head.rotation.z) * k;
+    }
+    if (body) body.rotation.y += (0 - body.rotation.y) * k;
+    return false;
+  }
+
+  const damp = Math.max(0, 1 - 10 * dt);
+  if (leftLeg) leftLeg.rotation.x *= damp;
+  if (rightLeg) rightLeg.rotation.x *= damp;
+  if (leftArm) {
+    leftArm.rotation.x *= Math.max(0, 1 - 8 * dt);
+    leftArm.rotation.z = Math.sin(t * 1.15) * 0.045;
+  }
+  if (rightArm) {
+    rightArm.rotation.x *= Math.max(0, 1 - 8 * dt);
+    rightArm.rotation.z = -Math.sin(t * 1.05) * 0.045;
+  }
+  av.position.y += (standY - av.position.y) * Math.min(1, 10 * dt);
+
+  const face = Math.atan2(dx, dz);
+  const baseYaw = w.ackBaseYaw ?? av.rotation.y;
+  const toward = wrapPi(face - baseYaw);
+  const bodyYaw = THREE.MathUtils.clamp(toward, -0.38, 0.38);
+  let dyaw = wrapPi(baseYaw + bodyYaw - av.rotation.y);
+  av.rotation.y += dyaw * Math.min(1, 5.5 * dt);
+
+  const remain = wrapPi(face - av.rotation.y);
+  if (body) {
+    const torsoY = THREE.MathUtils.clamp(remain * 0.35, -0.22, 0.22);
+    body.rotation.y += (torsoY - body.rotation.y) * Math.min(1, 5 * dt);
+  }
+  if (head) {
+    const headYaw = THREE.MathUtils.clamp(remain, -0.85, 0.85);
+    const k = Math.min(1, 5 * dt);
+    head.rotation.y += (headYaw - head.rotation.y) * k;
+    head.rotation.x += (-0.18 - head.rotation.x) * k;
+    head.rotation.z += (0 - head.rotation.z) * k;
+  }
+  return true;
+}
+
 /** Stand / wave / walk / work for dehibernated bunk crew. */
-export function updateAwakeCrew(crew, dt, t) {
+export function updateAwakeCrew(crew, dt, t, autoDoors = null, playerPos = null) {
   if (!crew?.length) return;
   for (let i = 0; i < crew.length; i++) {
     const av = crew[i];
     const w = av.userData.wake;
     if (!w) continue;
+    if (av.userData.state === "sitting" || w.phase === "seated") continue;
     const { head, leftArm, rightArm, leftLeg, rightLeg } = av.userData;
     const scale = av.userData.sleepScale || 0.4;
 
+    if (w.phase === "rise") {
+      w.riseT = (w.riseT || 0) + dt;
+      const p = Math.min(1, w.riseT / (w.riseDur || 0.95));
+      const u = 1 - (1 - p) * (1 - p) * (1 - p);
+      if (w.fromPos && w.toPos) av.position.lerpVectors(w.fromPos, w.toPos, u);
+      if (w.fromQuat && w.toQuat) av.quaternion.slerpQuaternions(w.fromQuat, w.toQuat, u);
+      lerpLimbsToStand(av, w.fromLimbs, u);
+      if (av.userData.body) av.userData.body.scale.y = 1;
+      if (p >= 1) {
+        poseNpcStand(av, w.toPos.x, w.toPos.z, w.standYaw || 0);
+        w.phase = "wave";
+        w.t = 2.4;
+      }
+      continue;
+    }
+
     if (w.phase === "wave" || w.phase === "talk") {
       w.t -= dt;
+      const flapR = Math.sin(t * 9.5) * 0.42;
+      const flapL = Math.sin(t * 9.5 + 0.32) * 0.42;
+      const cheerY = 0.40 * scale;
       if (rightArm) {
-        rightArm.rotation.z = -0.2 - Math.abs(Math.sin(t * 9.5)) * 1.15;
-        rightArm.rotation.x = -0.35;
+        rightArm.rotation.z = 1.95 + flapR;
+        rightArm.rotation.x = -0.12;
+        rightArm.position.y = cheerY;
       }
       if (leftArm) {
-        leftArm.rotation.z = 0.18;
-        leftArm.rotation.x = 0.08;
+        leftArm.rotation.z = -1.95 + flapL;
+        leftArm.rotation.x = -0.12;
+        leftArm.position.y = cheerY;
       }
       if (head) head.rotation.y = Math.sin(t * 2.4) * 0.18;
       av.position.y = scale + Math.sin(t * 6) * 0.012;
@@ -2919,6 +3253,7 @@ export function updateAwakeCrew(crew, dt, t) {
         w.wp = 0;
         if (rightArm) rightArm.rotation.set(0, 0, 0);
         if (leftArm) leftArm.rotation.set(0, 0, 0);
+        resetNpcLimbLayout(av);
       }
       continue;
     }
@@ -2926,6 +3261,16 @@ export function updateAwakeCrew(crew, dt, t) {
     if (w.phase === "walk") {
       const target = w.path[w.wp];
       if (!target) {
+        const seat = WORK_SEATS[av.userData.npcId];
+        if (seat) {
+          const pose = sitWorldPose(seat, scale);
+          w.phase = "hop";
+          w.hopT = 0;
+          w.hopDur = 0.62;
+          w.hopFrom = { x: av.position.x, y: av.position.y, z: av.position.z };
+          w.hopTo = pose;
+          continue;
+        }
         w.phase = "work";
         w.workHome = w.path[w.path.length - 1] || { x: av.position.x, z: av.position.z };
         w.workTarget = { ...w.workHome };
@@ -2940,14 +3285,23 @@ export function updateAwakeCrew(crew, dt, t) {
         w.wp += 1;
         continue;
       }
+      const seatY = WORK_SEATS[av.userData.npcId]?.y || 0;
+      const nearSeat = w.wp >= Math.max(0, w.path.length - 1);
+      const standY = scale + (nearSeat ? seatY : 0);
+      if (updateWakeAcknowledge(av, w, playerPos, dt, t, standY)) continue;
+      if (npcWaitForDoor(av, target, autoDoors)) {
+        const face = Math.atan2(dx, dz);
+        let dyaw = wrapPi(face - av.rotation.y);
+        av.rotation.y += dyaw * Math.min(1, 10 * dt);
+        av.position.y = scale + Math.abs(Math.sin(t * 5)) * 0.01;
+        continue;
+      }
       const step = Math.min(dist, 2.35 * dt);
       const inv = 1 / dist;
       av.position.x += dx * inv * step;
       av.position.z += dz * inv * step;
       const face = Math.atan2(dx, dz);
-      let dyaw = face - av.rotation.y;
-      while (dyaw > Math.PI) dyaw -= Math.PI * 2;
-      while (dyaw < -Math.PI) dyaw += Math.PI * 2;
+      let dyaw = wrapPi(face - av.rotation.y);
       av.rotation.y += dyaw * Math.min(1, 10 * dt);
       w.phaseWalk += 8.2 * dt;
       const swing = Math.sin(w.phaseWalk) * 0.48;
@@ -2955,11 +3309,45 @@ export function updateAwakeCrew(crew, dt, t) {
       if (rightLeg) rightLeg.rotation.x = -swing;
       if (leftArm) leftArm.rotation.x = -swing * 0.85;
       if (rightArm) rightArm.rotation.x = swing * 0.85;
-      av.position.y = scale + Math.abs(Math.sin(w.phaseWalk)) * 0.025;
+      av.position.y = standY + Math.abs(Math.sin(w.phaseWalk)) * 0.025;
+      continue;
+    }
+
+    if (w.phase === "hop") {
+      w.hopT = (w.hopT || 0) + dt;
+      const p = Math.min(1, w.hopT / (w.hopDur || 0.62));
+      const u = p * p * (3 - 2 * p);
+      const from = w.hopFrom;
+      const to = w.hopTo;
+      if (from && to) {
+        av.position.x = from.x + (to.x - from.x) * u;
+        av.position.z = from.z + (to.z - from.z) * u;
+        av.position.y = from.y + (to.y - from.y) * u + Math.sin(u * Math.PI) * 0.5;
+        let dyaw = to.rotY - av.rotation.y;
+        while (dyaw > Math.PI) dyaw -= Math.PI * 2;
+        while (dyaw < -Math.PI) dyaw += Math.PI * 2;
+        av.rotation.y += dyaw * Math.min(1, 12 * dt);
+      }
+      const flap = Math.sin(u * Math.PI);
+      if (leftArm) {
+        leftArm.rotation.z = -0.7 * flap;
+        leftArm.rotation.x = -0.22;
+      }
+      if (rightArm) {
+        rightArm.rotation.z = 0.7 * flap;
+        rightArm.rotation.x = -0.22;
+      }
+      if (leftLeg) leftLeg.rotation.x = (-Math.PI / 2) * u;
+      if (rightLeg) rightLeg.rotation.x = (-Math.PI / 2) * u;
+      if (p >= 1) {
+        poseNpcSit(av, WORK_SEATS[av.userData.npcId]);
+        w.phase = "seated";
+      }
       continue;
     }
 
     if (w.phase === "work") {
+      if (updateWakeAcknowledge(av, w, playerPos, dt, t, scale)) continue;
       w.t -= dt;
       if (w.t <= 0) {
         w.t = 1.4 + Math.random() * 2.8;
@@ -2980,9 +3368,7 @@ export function updateAwakeCrew(crew, dt, t) {
         av.position.x += dx * inv * step;
         av.position.z += dz * inv * step;
         const face = Math.atan2(dx, dz);
-        let dyaw = face - av.rotation.y;
-        while (dyaw > Math.PI) dyaw -= Math.PI * 2;
-        while (dyaw < -Math.PI) dyaw += Math.PI * 2;
+        let dyaw = wrapPi(face - av.rotation.y);
         av.rotation.y += dyaw * Math.min(1, 8 * dt);
         w.phaseWalk += 6.4 * dt;
         const swing = Math.sin(w.phaseWalk) * 0.32;
@@ -3821,12 +4207,32 @@ function makeBed(group, x, y, z, rotY = 0, tones = {}, interactables = null, roo
 
 export function setBedPodHover(bed, hovered) {
   const m = bed?.userData?.podMat;
-  if (!m) return;
-  const on = !!hovered && !!bed.userData.podClosed;
-  m.emissiveIntensity = on ? 0.62 : 0.08;
-  m.opacity = on ? 0.92 : 0.72;
-  m.color.setHex(on ? 0xe8f4ff : 0xd8e2ec);
-  m.needsUpdate = true;
+  if (m) {
+    const on = !!hovered && !!bed.userData.podClosed;
+    m.emissiveIntensity = on ? 0.62 : 0.08;
+    m.opacity = on ? 0.92 : 0.72;
+    m.color.setHex(on ? 0xe8f4ff : 0xd8e2ec);
+    m.needsUpdate = true;
+  }
+  const av = bed?.userData?.sleeper;
+  if (av?.userData?.sleep && av.userData.state === "sleeping") {
+    av.userData.sleep.hovering = !!hovered;
+  }
+}
+
+/** Display name for a sleeper's workplace. */
+export function npcWorkRoomName(work) {
+  return (
+    {
+      garden: "Hydroponic Garden",
+      kitchen: "Kitchen",
+      engine: "Engine Room",
+      washroom: "Washroom",
+      cockpit: "Cockpit",
+      hub: "Hub",
+      crewDeck: "Crew Deck",
+    }[work] || "that room"
+  );
 }
 
 /** True if this crewmate's workplace door is still sealed. */
@@ -5487,7 +5893,7 @@ export function createSpaceView(renderer, aspect = 16 / 9) {
   };
 }
 
-const STATUS_BRIEF_KEY = "luac-ship-ai-brief";
+const STATUS_BRIEF_KEY = "adastra-ship-ai-brief";
 
 export function clearShipBriefingProgress() {
   try {
@@ -6037,7 +6443,6 @@ function createInfoHubArchive(hub, anim) {
       mesh,
       label,
       angle,
-      href: `../y${year}/`,
       baseColor: new THREE.Color(0xf0a428),
       baseEmissive: new THREE.Color(0xc87818),
       labelBase: labelBaseColor.clone(),
@@ -6214,7 +6619,7 @@ export function buildShip(scene) {
 
   const colliders = [];
   const zones = [];
-  const anim = { screens: [], bars: [], rings: [], screenRings: [], cores: [], engineLights: [], blinkers: [], hubNeon: null, sittingCrew: [], patrolCrew: [], sleepingCrew: [], enginePipes: [], deliciousNeon: null, plants: [], activePlant: null, sosRooms: [], sosActive: true, wallMonitors: [], infoHubHolos: [], beds: [] };
+  const anim = { screens: [], bars: [], rings: [], screenRings: [], cores: [], engineLights: [], blinkers: [], hubNeon: null, sittingCrew: [], patrolCrew: [], sleepingCrew: [], enginePipes: [], deliciousNeon: null, plants: [], activePlant: null, sosRooms: [], sosActive: true, pendingSosRestore: [], wallMonitors: [], infoHubHolos: [], beds: [] };
   anim.root = root;
   const autoDoors = [];
   const interactables = [];
@@ -6277,6 +6682,7 @@ export function buildShip(scene) {
   {
     const p = deskSeat(0, 1.4, 0, 0, -1.2);
     makeChair(bridge, p.x, 0, p.z, p.rotY, chairTone);
+    registerWorkSeat("nova", control, p.x, p.z, p.rotY, stageH);
   }
   // side desks — two chairs each
   for (const desk of [
@@ -6286,6 +6692,7 @@ export function buildShip(scene) {
     for (const lx of [-0.58, 0.58]) {
       const p = deskSeat(desk.x, desk.z, desk.rot, lx);
       makeChair(bridge, p.x, 0, p.z, p.rotY, chairTone);
+      if (desk.x > 0 && lx < 0) registerWorkSeat("rex", control, p.x, p.z, p.rotY, stageH);
     }
   }
   makeBigScreen(control, anim, -7.5, 2.1, 2.2, 2.0, 1.4, Math.PI / 2);
@@ -6456,6 +6863,7 @@ export function buildShip(scene) {
   [-4.4, -3.4, -2.4, -1.4, -0.4].forEach((x, i) => {
     makeChair(conf, x, 0, -2.0, Math.PI, dinerChairColors[i]);
     makeChair(conf, x, 0, -4.0, 0, dinerChairColors[i + 5]);
+    if (x === -0.4) registerWorkSeat("tess", conf, x, -2.0, Math.PI);
   });
   // neon script on south wall behind the dining table
   makeDeliciousNeon(conf, anim, -2.6, 2.75, -5.12);
@@ -6605,15 +7013,15 @@ export function buildShip(scene) {
   toilets.add(box(sinkW * 0.92, 1.05, 0.04, mirrorFrame, sinkX, 1.95, -4.28));
   toilets.add(box(sinkW * 0.86, 0.95, 0.03, mirrorGlass, sinkX, 1.95, -4.25));
   const mirrorAnchor = new THREE.Object3D();
-  // Face into the washroom (+Z) so debug text sits in front of the glass
-  mirrorAnchor.position.set(sinkX, 1.95, -4.22);
+  // Sit in front of the glass (into the room) so the debug label is readable
+  mirrorAnchor.position.set(sinkX, 1.95, -4.20);
   toilets.add(mirrorAnchor);
   registerWallMonitor(anim, toilets, mirrorAnchor, {
     screenMat: mirrorGlass,
     barMats: [],
     ringMats: [],
     underGlowMat: mirrorFrame,
-  }, { maxW: 1.75, maxH: 0.75, z: 0.04, y: -0.22 });
+  }, { maxW: 2.6, maxH: 0.82, z: 0.06, y: -0.16, prominent: true });
   styleRoomLighting(toilets, "hygiene");
   enableSos(toilets, anim);
 
@@ -6666,6 +7074,7 @@ export function buildShip(scene) {
   makeChair(engine, -6.2, 0, -0.5, Math.PI / 2, 0x8a9088);
   makeConsole(engine, 5.2, 0, -0.5, -Math.PI / 2);
   makeChair(engine, 6.2, 0, -0.5, -Math.PI / 2, 0x8a9088);
+  registerWorkSeat("kai", engine, 6.2, -0.5, -Math.PI / 2);
   // SOS orange wall monitor on west wall (north of side console)
   decorateWallMonitors(engine, anim, [
     [-7.75, 2.45, 3.15, Math.PI / 2, 3.1, 1.75],
@@ -6791,22 +7200,42 @@ export function downgradeMaterialsForMobile(root) {
   });
 }
 
-/** Slide glass doors open/closed based on player proximity.
+function nearDoorTrigger(pos, door, r2) {
+  if (!pos || !door?.trigger) return false;
+  const dx = pos.x - door.trigger.x;
+  const dz = pos.z - door.trigger.z;
+  return dx * dx + dz * dz < r2;
+}
+
+function npcNearDoorTrigger(crew, door, r2) {
+  if (!crew?.length) return false;
+  for (let i = 0; i < crew.length; i++) {
+    const av = crew[i];
+    const st = av?.userData?.state;
+    if (!av || st === "sleeping" || st === "sitting") continue;
+    if (!av.userData.wake) continue;
+    if (nearDoorTrigger(av.position, door, r2)) return true;
+  }
+  return false;
+}
+
+/** Slide glass doors open/closed based on player or walking-NPC proximity.
  * @param {(kind: "open" | "close", door: object) => void} [onEdge]
  *   Only fires for real glass panels that actually open/close from proximity.
  *   Locked / force-closed seals stay silent (no open/close SFX).
  */
-export function updateAutoDoors(autoDoors, playerPos, dt, forceClosed = false, onEdge = null) {
+export function updateAutoDoors(autoDoors, playerPos, dt, forceClosed = false, onEdge = null, npcCrew = null) {
   const triggerR = 3.2;
+  const triggerR2 = triggerR * triggerR;
   const speed = 10;
   for (let i = 0; i < autoDoors.length; i++) {
     const d = autoDoors[i];
     const sealed = !!(forceClosed || d.locked);
     let next = 0;
     if (!sealed) {
-      const dx = playerPos.x - d.trigger.x;
-      const dz = playerPos.z - d.trigger.z;
-      next = Math.hypot(dx, dz) < triggerR ? 1 : 0;
+      if (nearDoorTrigger(playerPos, d, triggerR2) || npcNearDoorTrigger(npcCrew, d, triggerR2)) {
+        next = 1;
+      }
     }
     // SFX only when a glass door freely changes from player proximity
     if (
@@ -6827,12 +7256,21 @@ export function updateAutoDoors(autoDoors, playerPos, dt, forceClosed = false, o
 
 /** Spoken when a sleeper's workplace is still behind a sealed door. */
 export const NPC_STATION_LOCKED_LINES = [
-  "That station is still sealed, Captain. Unlock the room first.",
-  "Can't send them in — the workplace door is still locked.",
-  "Room's still sealed. Restore access before you wake them.",
-  "Their post is behind a locked hatch. Open that first.",
-  "Workplace offline. Unlock the room, then wake the crew.",
+  "{room} is still sealed, Captain. Unlock it first.",
+  "Can't send them in — the {room} door is still locked.",
+  "{room} is still sealed. Restore access before you wake them.",
+  "Their post in {room} is behind a locked hatch. Open that first.",
+  "{room} is offline. Unlock it, then wake the crew.",
 ];
+
+export function pickStationLockedLine(work) {
+  const room = npcWorkRoomName(work);
+  const list = NPC_STATION_LOCKED_LINES;
+  const raw =
+    (list?.length ? list[(Math.random() * list.length) | 0] : "") ||
+    "{room} is still sealed, Captain. Unlock it first.";
+  return raw.replace(/\{room\}/g, room);
+}
 
 /** AI lines when the captain tries a sealed door (database still corrupt). */
 export const LOCKED_DOOR_LINES = [

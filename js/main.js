@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { buildShip, createSpaceView, createStatusView, updateAutoDoors, updateStallDoors, nearestInteractable, nearestLockedDoor, LOCKED_DOOR_LINES, INSUFFICIENT_DATAPOINT_LINES, NPC_STATION_LOCKED_LINES, pickRoomRestoredLine, updateSosLights, updatePlants, updateSleepingCrew, updateAwakeCrew, downgradeMaterialsForMobile, unlockShipDoor, relockAllShipDoors, clearShipBriefingProgress, debugWallMonitor, resetAllRoomSos, applyWallMonitorVisual, setWallMonitorSosBlend, toggleBedPod, setBedPodHover, isNpcWorkRoomLocked, bedFromHit, beginNpcWake, sleeperFromHit, resetSleepingCrew } from "./ship.js?v=20260815bl";
+import { buildShip, createSpaceView, createStatusView, updateAutoDoors, updateStallDoors, nearestInteractable, nearestLockedDoor, LOCKED_DOOR_LINES, INSUFFICIENT_DATAPOINT_LINES, pickStationLockedLine, pickRoomRestoredLine, updateSosLights, updatePlants, updateSleepingCrew, updateAwakeCrew, updateSittingCrew, downgradeMaterialsForMobile, unlockShipDoor, relockAllShipDoors, clearShipBriefingProgress, debugWallMonitor, resetAllRoomSos, applyWallMonitorVisual, setWallMonitorSosBlend, toggleBedPod, setBedPodHover, isNpcWorkRoomLocked, bedFromHit, beginNpcWake, sleeperFromHit, resetSleepingCrew, pumpPendingSosRestore } from "./ship.js?v=20260815bz";
 import { Player } from "./player.js?v=20260815ai";
 import { isTouchDevice, setupMobileControls } from "./mobile.js";
 import { HudPrompt } from "./hud-prompt.js";
@@ -599,14 +599,6 @@ async function boot() {
     return list[(Math.random() * list.length) | 0];
   }
 
-  function pickStationLockedLine() {
-    const list = NPC_STATION_LOCKED_LINES;
-    if (!list?.length) {
-      return "That station is still sealed, Captain. Unlock the room first.";
-    }
-    return list[(Math.random() * list.length) | 0];
-  }
-
   function playPodClick(result) {
     if (result === "open" || result === "close") playPodToggle(result);
   }
@@ -932,7 +924,7 @@ async function boot() {
       '<div class="ship-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="debug-confirm-title">' +
       '<p id="debug-confirm-title">Do you want to spend <strong>' +
       MONITOR_DEBUG_COST +
-      " data points</strong> to debug this monitor?</p>" +
+      " data points</strong> to debug this room?</p>" +
       '<div class="ship-confirm-actions">' +
       '<button type="button" class="ship-confirm-yes" id="debug-confirm-yes">Yes</button>' +
       '<button type="button" class="ship-confirm-no" id="debug-confirm-no">No</button>' +
@@ -1011,7 +1003,7 @@ async function boot() {
     if (anyShipDialogOpen()) return false;
     if (isNpcWorkRoomLocked(av.userData.npcWork, ship.autoDoors)) {
       playDoorDenied();
-      shipVoice.trySpeak(pickStationLockedLine());
+      shipVoice.trySpeak(pickStationLockedLine(av.userData.npcWork));
       return true;
     }
     const used = getSpentDatapoints();
@@ -1071,7 +1063,7 @@ async function boot() {
         shipVoice.trySpeak(pickInsufficientLine());
       } else if (isNpcWorkRoomLocked(av.userData.npcWork, ship.autoDoors)) {
         playDoorDenied();
-        shipVoice.trySpeak(pickStationLockedLine());
+        shipVoice.trySpeak(pickStationLockedLine(av.userData.npcWork));
       } else {
         addSpentDatapoints(NPC_ACTIVATE_COST);
         syncConsoleDatapoints();
@@ -1715,7 +1707,8 @@ async function boot() {
           playDoorAuth();
           setTimeout(() => playDoorOpen(), 90);
         } else playDoorClose();
-      }
+      },
+      ship.anim?.sleepingCrew
     );
     // Room ambience: SOS vs normal, smooth 0.4s blend inside ShipAmbience
     {
@@ -1816,10 +1809,10 @@ async function boot() {
       updateSosLights(ship.anim.sosRooms, t, ship.anim.hubNeon, hubStillSos);
     }
     updatePlants(ship.anim, t);
-    if (!mobileQuality || (frame & 1) === 0) {
-      updateSleepingCrew(ship.anim?.sleepingCrew, t, player.position);
-    }
-    updateAwakeCrew(ship.anim?.sleepingCrew, dt, t);
+    updateSleepingCrew(ship.anim?.sleepingCrew, t, player.position, 22, dt);
+    pumpPendingSosRestore(ship.anim);
+    updateAwakeCrew(ship.anim?.sleepingCrew, dt, t, ship.autoDoors, player.position);
+    updateSittingCrew(ship.anim?.sleepingCrew, dt, t, player.position);
     // deco only when near animated areas; throttle harder on mobile
     const px = player.position.x;
     const pz = player.position.z;
