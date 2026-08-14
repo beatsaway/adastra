@@ -1094,6 +1094,7 @@ function makeEntranceFrame(room, frameKeys, {
 
 function makeGlassDoor(room, doorsOut, doorKeys, {
   ox, oz, localX, localZ, gw, h, axis, colliders = null, locked = false, side = "",
+  roomLabel = "",
 }) {
   const wx = ox + localX;
   const wz = oz + localZ;
@@ -1213,6 +1214,7 @@ function makeGlassDoor(room, doorsOut, doorKeys, {
     savedBlockCollider: blockCollider,
     colliders,
     unlockHolo,
+    roomLabel: String(roomLabel || room?.userData?.label || ""),
   });
 }
 
@@ -1231,6 +1233,7 @@ function roomShell(colliders, group, {
 }) {
   const room = new THREE.Group();
   room.position.set(cx, 0, cz);
+  if (label) room.userData.label = label;
   group.add(room);
   const ox = cx;
   const oz = cz;
@@ -1389,7 +1392,7 @@ function roomShell(colliders, group, {
       if (autoDoors && doorKeys && roomWantsDoor(label)) {
         makeGlassDoor(room, autoDoors, doorKeys, {
           ox, oz, localX: 0, localZ: z, gw, h, axis: "x",
-          colliders, locked: roomDoorLocked(label), side,
+          colliders, locked: roomDoorLocked(label), side, roomLabel: label,
         });
       }
     }
@@ -1427,7 +1430,7 @@ function roomShell(colliders, group, {
       if (autoDoors && doorKeys && roomWantsDoor(label)) {
         makeGlassDoor(room, autoDoors, doorKeys, {
           ox, oz, localX: x, localZ: 0, gw, h, axis: "z",
-          colliders, locked: roomDoorLocked(label), side,
+          colliders, locked: roomDoorLocked(label), side, roomLabel: label,
         });
       }
     }
@@ -2688,24 +2691,50 @@ function layCrewInBed(bed, spec, scale = 0.4) {
   return av;
 }
 
-function workPathFor(work, aisle) {
+function compactWalkPath(pts) {
+  const out = [];
+  for (const p of pts) {
+    if (!p) continue;
+    const prev = out[out.length - 1];
+    if (prev && Math.hypot(p.x - prev.x, p.z - prev.z) < 0.18) continue;
+    out.push(p);
+  }
+  return out;
+}
+
+function workPathFor(work, aisle, npcId = "") {
+  // Doorway / corridor centers — stay in the walkable spine, not through walls
+  const dormLane = { x: aisle.x, z: -10.25 };
+  const dormDoor = { x: -10.15, z: -10.25 };
   const deck = { x: 0, z: -10.25 };
-  const south = { x: 0, z: -4.5 };
+  const deckNorth = { x: 0, z: -8.05 };
+  const southCorrN = { x: 0, z: -1.05 };
   const hub = { x: 0, z: 4.5 };
+  const hubNorth = { x: 0, z: 10.05 };
+  const cockDoor = { x: 0, z: 17.05 };
+  const gardenDoor = { x: -5.55, z: 4.5 };
+  const kitchenDoor = { x: 5.55, z: 4.5 };
+  const washDoor = { x: 10.05, z: -10.25 };
+  const engDoor = { x: 0, z: -12.55 };
+  const engineDoor = { x: 0, z: -19.55 };
+  const viaHub = [dormLane, dormDoor, deck, deckNorth, southCorrN, hub];
+  const helm = npcId === "rex" ? { x: -3.4, z: 19.15 } : { x: 3.4, z: 19.15 };
   const routes = {
-    cockpit: [deck, south, hub, { x: 0, z: 13.5 }, { x: 3.5, z: 19.1 }],
-    hub: [deck, south, { x: 2.4, z: 4.5 }],
-    garden: [deck, south, hub, { x: -8.4, z: 8.0 }],
-    kitchen: [deck, south, hub, { x: 10.6, z: 1.6 }],
-    engine: [deck, { x: 0, z: -16 }, { x: 5.4, z: -22 }],
-    washroom: [{ x: 12.8, z: -8.6 }],
-    crewDeck: [{ x: -3.6, z: -10.25 }],
+    cockpit: [...viaHub, hubNorth, cockDoor, helm],
+    hub: [...viaHub, { x: 2.6, z: 4.5 }],
+    garden: [...viaHub, gardenDoor, { x: -6.35, z: 8.6 }],
+    kitchen: [...viaHub, kitchenDoor, { x: 9.4, z: 1.7 }],
+    engine: [dormLane, dormDoor, deck, engDoor, engineDoor, { x: 5.5, z: -22.4 }],
+    washroom: [dormLane, dormDoor, deck, washDoor, { x: 13.1, z: -10.25 }],
+    crewDeck: [dormLane, dormDoor, { x: -3.8, z: -10.25 }],
   };
-  return [aisle, ...(routes[work] || routes.crewDeck)];
+  return compactWalkPath([aisle, ...(routes[work] || routes.crewDeck)]);
 }
 
 function aisleWorldFromBed(bed) {
-  const local = new THREE.Vector3(0, 0, 1.15);
+  // Stand in the dorm aisle, past the foot of the bunk (not inside the mattress)
+  bed.updateWorldMatrix(true, false);
+  const local = new THREE.Vector3(0, 0, 2.4);
   bed.localToWorld(local);
   return { x: local.x, z: local.z };
 }
@@ -2733,23 +2762,23 @@ function attachNpcToRoot(av, root) {
   av.position.copy(pos);
 }
 
-/** Wake a sleeper: stand + wave on the bunk, then talk, then walk to work. */
+/** Wake a sleeper: stand in the aisle, wave, talk, then walk the corridor path to work. */
 export function beginNpcWake(av, root) {
   if (!av || av.userData.state === "awake" || av.userData.state === "waking") return false;
   const bed = av.userData.bed;
   if (bed?.userData?.podClosed) toggleBedPod(bed);
   attachNpcToRoot(av, root);
-  const wp = new THREE.Vector3();
-  av.getWorldPosition(wp);
   const aisle = aisleWorldFromBed(bed);
-  const yaw = Math.atan2(aisle.x - wp.x, aisle.z - wp.z);
-  poseNpcStand(av, wp.x, wp.z, yaw);
+  const bedWorld = new THREE.Vector3();
+  bed.getWorldPosition(bedWorld);
+  const yaw = Math.atan2(aisle.x - bedWorld.x, aisle.z - bedWorld.z);
+  poseNpcStand(av, aisle.x, aisle.z, yaw);
   av.userData.state = "waking";
   av.userData.sleep = null;
   av.userData.wake = {
     phase: "wave",
     t: 2.4,
-    path: workPathFor(av.userData.npcWork, aisle),
+    path: workPathFor(av.userData.npcWork, aisle, av.userData.npcId),
     wp: 0,
     phaseWalk: Math.random() * Math.PI * 2,
     spoke: false,
@@ -2763,7 +2792,7 @@ export function beginNpcWake(av, root) {
 function placeNpcAtWork(av, root) {
   attachNpcToRoot(av, root);
   const aisle = aisleWorldFromBed(av.userData.bed);
-  const path = workPathFor(av.userData.npcWork, aisle);
+  const path = workPathFor(av.userData.npcWork, aisle, av.userData.npcId);
   const last = path[path.length - 1];
   poseNpcStand(av, last.x, last.z, 0);
   av.userData.state = "awake";
@@ -3744,22 +3773,18 @@ function makeBed(group, x, y, z, rotY = 0, tones = {}, interactables = null, roo
   g.add(box(0.88, 0.5, 0.016, barGlass, 0, 0.78, -0.95));
   g.add(box(0.9, 0.04, 0.08, mat(glow, { emissive: glow, emissiveIntensity: 0.7 }), 0, 1.05, -0.95));
 
-  // pale glass sleep capsule — shared cheap glass (no transmission hitch)
-  if (!makeBed._podMat) {
-    makeBed._podMat = new THREE.MeshStandardMaterial({
-      color: 0xd8e2ec,
-      metalness: 0.12,
-      roughness: 0.16,
-      transparent: true,
-      opacity: 0.72,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-    });
-  } else {
-    makeBed._podMat.color.setHex(0xd8e2ec);
-    makeBed._podMat.opacity = 0.72;
-  }
-  const shieldMat = makeBed._podMat;
+  // pale glass sleep capsule — unique mat so hover doesn't light every bunk
+  const shieldMat = new THREE.MeshStandardMaterial({
+    color: 0xd8e2ec,
+    metalness: 0.12,
+    roughness: 0.16,
+    transparent: true,
+    opacity: 0.72,
+    emissive: 0xb8d4ea,
+    emissiveIntensity: 0.08,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
   const pod = new THREE.Group();
   // CapsuleGeometry is Y-up; rotate onto Z so it runs along the bunk
   const radius = 0.8;
@@ -3772,6 +3797,7 @@ function makeBed(group, x, y, z, rotY = 0, tones = {}, interactables = null, roo
   // lower so the shell fully wraps the bed frame/mattress
   capsule.position.y = radius * 0.68;
   capsule.scale.set(1.1, 1, 0.95);
+  capsule.userData.podShell = true;
   pod.add(capsule);
   const openY = -(radius * 2.2);
   const closedY = -0.04;
@@ -3782,6 +3808,8 @@ function makeBed(group, x, y, z, rotY = 0, tones = {}, interactables = null, roo
 
   g.userData.bedRoot = true;
   g.userData.pod = pod;
+  g.userData.capsule = capsule;
+  g.userData.podMat = shieldMat;
   g.userData.openY = openY;
   g.userData.closedY = closedY;
   g.userData.podClosed = true;
@@ -3789,6 +3817,33 @@ function makeBed(group, x, y, z, rotY = 0, tones = {}, interactables = null, roo
     if (o.isMesh) o.userData.bedClick = true;
   });
   return g;
+}
+
+export function setBedPodHover(bed, hovered) {
+  const m = bed?.userData?.podMat;
+  if (!m) return;
+  const on = !!hovered && !!bed.userData.podClosed;
+  m.emissiveIntensity = on ? 0.62 : 0.08;
+  m.opacity = on ? 0.92 : 0.72;
+  m.color.setHex(on ? 0xe8f4ff : 0xd8e2ec);
+  m.needsUpdate = true;
+}
+
+/** True if this crewmate's workplace door is still sealed. */
+export function isNpcWorkRoomLocked(work, doors) {
+  const needles = {
+    garden: ["garden"],
+    kitchen: ["kitchen"],
+    engine: ["engine room"],
+    washroom: ["washroom", "hygiene"],
+  }[work];
+  if (!needles) return false;
+  for (const d of doors || []) {
+    if (!d?.lockable || !d.locked) continue;
+    const L = String(d.roomLabel || "").toLowerCase();
+    if (needles.some((n) => L.includes(n))) return true;
+  }
+  return false;
 }
 
 export function toggleBedPod(bed) {
@@ -3799,17 +3854,17 @@ export function toggleBedPod(bed) {
     bed.userData.podClosed = false;
     pod.visible = false;
     pod.position.y = bed.userData.openY;
-  } else {
-    // Don't slam shut on an awake crewmate still standing on the bunk
-    const sleeper = bed.userData.sleeper;
-    if (sleeper && sleeper.userData.state !== "sleeping" && sleeper.parent === bed) {
-      return false;
-    }
-    bed.userData.podClosed = true;
-    pod.visible = true;
-    pod.position.y = bed.userData.closedY;
+    setBedPodHover(bed, false);
+    return "open";
   }
-  return true;
+  const sleeper = bed.userData.sleeper;
+  if (sleeper && sleeper.userData.state !== "sleeping" && sleeper.parent === bed) {
+    return false;
+  }
+  bed.userData.podClosed = true;
+  pod.visible = true;
+  pod.position.y = bed.userData.closedY;
+  return "close";
 }
 
 export function bedFromHit(obj) {
@@ -6769,6 +6824,15 @@ export function updateAutoDoors(autoDoors, playerPos, dt, forceClosed = false, o
     if (d.panel) d.panel.position.x = d.closedX + d.open * d.openDist;
   }
 }
+
+/** Spoken when a sleeper's workplace is still behind a sealed door. */
+export const NPC_STATION_LOCKED_LINES = [
+  "That station is still sealed, Captain. Unlock the room first.",
+  "Can't send them in — the workplace door is still locked.",
+  "Room's still sealed. Restore access before you wake them.",
+  "Their post is behind a locked hatch. Open that first.",
+  "Workplace offline. Unlock the room, then wake the crew.",
+];
 
 /** AI lines when the captain tries a sealed door (database still corrupt). */
 export const LOCKED_DOOR_LINES = [

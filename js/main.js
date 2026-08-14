@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { buildShip, createSpaceView, createStatusView, updateAutoDoors, updateStallDoors, nearestInteractable, nearestLockedDoor, LOCKED_DOOR_LINES, INSUFFICIENT_DATAPOINT_LINES, pickRoomRestoredLine, updateSosLights, updatePlants, updateSleepingCrew, updateAwakeCrew, downgradeMaterialsForMobile, unlockShipDoor, relockAllShipDoors, clearShipBriefingProgress, debugWallMonitor, resetAllRoomSos, applyWallMonitorVisual, setWallMonitorSosBlend, toggleBedPod, bedFromHit, beginNpcWake, sleeperFromHit, resetSleepingCrew } from "./ship.js?v=20260815bk";
+import { buildShip, createSpaceView, createStatusView, updateAutoDoors, updateStallDoors, nearestInteractable, nearestLockedDoor, LOCKED_DOOR_LINES, INSUFFICIENT_DATAPOINT_LINES, NPC_STATION_LOCKED_LINES, pickRoomRestoredLine, updateSosLights, updatePlants, updateSleepingCrew, updateAwakeCrew, downgradeMaterialsForMobile, unlockShipDoor, relockAllShipDoors, clearShipBriefingProgress, debugWallMonitor, resetAllRoomSos, applyWallMonitorVisual, setWallMonitorSosBlend, toggleBedPod, setBedPodHover, isNpcWorkRoomLocked, bedFromHit, beginNpcWake, sleeperFromHit, resetSleepingCrew } from "./ship.js?v=20260815bl";
 import { Player } from "./player.js?v=20260815ai";
 import { isTouchDevice, setupMobileControls } from "./mobile.js";
 import { HudPrompt } from "./hud-prompt.js";
@@ -17,7 +17,7 @@ import {
 import { ShipScenes, SCENE } from "./scenes.js";
 import { shipVoice } from "./ai-voice.js";
 import { createAiDrone } from "./ai-drone.js";
-import { ShipAmbience, ProximityTransformerHum, InfoHubHoloHiss, playDoorOpen, playDoorClose, playDoorDenied, playDoorAuth, playCyberSuccess, playHoloHover, resumeAudio, playYearReveal, playYearCollapse, playYearHover, playYearPick } from "../sfx/index.js?v=20260815be";
+import { ShipAmbience, ProximityTransformerHum, InfoHubHoloHiss, playDoorOpen, playDoorClose, playDoorDenied, playDoorAuth, playCyberSuccess, playPodToggle, playHoloHover, resumeAudio, playYearReveal, playYearCollapse, playYearHover, playYearPick } from "../sfx/index.js?v=20260815bf";
 
 const loaderEl = document.getElementById("loader");
 const loadBar = document.getElementById("load-bar");
@@ -356,6 +356,8 @@ async function boot() {
   let unlockDenyFx = null;
   /** @type {object | null} */
   let hoveredDebugMonitor = null;
+  /** @type {object | null} */
+  let hoveredBed = null;
   /** @type {{ wm: object, t: number, dur: number, bar: object, barMat: object, fullW: number } | null} */
   let debugTweenFx = null;
   const unlockRaycaster = new THREE.Raycaster();
@@ -595,6 +597,18 @@ async function boot() {
       return "Insufficient data points. Restore more of my archive, Captain.";
     }
     return list[(Math.random() * list.length) | 0];
+  }
+
+  function pickStationLockedLine() {
+    const list = NPC_STATION_LOCKED_LINES;
+    if (!list?.length) {
+      return "That station is still sealed, Captain. Unlock the room first.";
+    }
+    return list[(Math.random() * list.length) | 0];
+  }
+
+  function playPodClick(result) {
+    if (result === "open" || result === "close") playPodToggle(result);
   }
 
   function clearUnlockDenyFx(restore = true) {
@@ -995,6 +1009,11 @@ async function boot() {
   function tryActivateNpc(av) {
     if (!av || av.userData.state !== "sleeping") return false;
     if (anyShipDialogOpen()) return false;
+    if (isNpcWorkRoomLocked(av.userData.npcWork, ship.autoDoors)) {
+      playDoorDenied();
+      shipVoice.trySpeak(pickStationLockedLine());
+      return true;
+    }
     const used = getSpentDatapoints();
     const avail = availableDatapoints(collectedDatapoints, used);
     if (avail < NPC_ACTIVATE_COST) {
@@ -1050,6 +1069,9 @@ async function boot() {
       if (avail < NPC_ACTIVATE_COST) {
         playDoorDenied();
         shipVoice.trySpeak(pickInsufficientLine());
+      } else if (isNpcWorkRoomLocked(av.userData.npcWork, ship.autoDoors)) {
+        playDoorDenied();
+        shipVoice.trySpeak(pickStationLockedLine());
       } else {
         addSpentDatapoints(NPC_ACTIVATE_COST);
         syncConsoleDatapoints();
@@ -1243,6 +1265,13 @@ async function boot() {
     }
   }
 
+  function setBedHover(bed) {
+    if (anyShipDialogOpen()) return;
+    if (hoveredBed && hoveredBed !== bed) setBedPodHover(hoveredBed, false);
+    hoveredBed = bed || null;
+    if (bed) setBedPodHover(bed, true);
+  }
+
   function doInteract() {
     if (hudPrompt.activateDialogue()) return;
 
@@ -1361,7 +1390,7 @@ async function boot() {
           return;
         }
         if (bunk?.bed) {
-          toggleBedPod(bunk.bed);
+          playPodClick(toggleBedPod(bunk.bed));
           return;
         }
         const opened = touchMode
@@ -1387,6 +1416,7 @@ async function boot() {
       if (deskOpt) {
         setUnlockHover(null);
         setDebugMonitorHover(null);
+        setBedHover(null);
         setDeskHover(deskOpt);
         return;
       }
@@ -1396,6 +1426,7 @@ async function boot() {
         : pickDebugMonitor(e.clientX, e.clientY);
       if (debugMon) {
         setUnlockHover(null);
+        setBedHover(null);
         setDebugMonitorHover(debugMon);
         return;
       }
@@ -1403,7 +1434,16 @@ async function boot() {
       const door = lockedPtr
         ? pickUnlockDoor(null, null)
         : pickUnlockDoor(e.clientX, e.clientY);
-      setUnlockHover(door);
+      if (door) {
+        setBedHover(null);
+        setUnlockHover(door);
+        return;
+      }
+      setUnlockHover(null);
+      const bunk = lockedPtr
+        ? pickBedOrSleeper(null, null)
+        : pickBedOrSleeper(e.clientX, e.clientY);
+      setBedHover(bunk?.bed || null);
     });
   }
 
@@ -1439,7 +1479,7 @@ async function boot() {
           return;
         }
         if (bunk?.bed) {
-          toggleBedPod(bunk.bed);
+          playPodClick(toggleBedPod(bunk.bed));
           return;
         }
         tryOpenYearByAim(e.clientX, e.clientY);

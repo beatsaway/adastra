@@ -308,3 +308,52 @@ export function playCyberSuccess() {
   ping.start(t0 + 0.3);
   ping.stop(t0 + 0.55);
 }
+
+/** Sleep capsule open / close — short pneumatic hiss (higher than room doors). */
+export function playPodToggle(kind) {
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+  void resumeAudio();
+
+  const t0 = ctx.currentTime;
+  const opening = kind !== "close";
+  const master = ctx.createGain();
+  master.gain.value = 1;
+  master.connect(ctx.destination);
+
+  const hiss = ctx.createBufferSource();
+  hiss.buffer = noiseBuffer(ctx, opening ? 0.38 : 0.28, "pink");
+  hiss.playbackRate.value = opening ? 1.35 : 0.92;
+  const bp = ctx.createBiquadFilter();
+  bp.type = "bandpass";
+  bp.Q.value = 0.55;
+  if (opening) {
+    bp.frequency.setValueAtTime(720, t0);
+    bp.frequency.exponentialRampToValueAtTime(1680, t0 + 0.22);
+  } else {
+    bp.frequency.setValueAtTime(1400, t0);
+    bp.frequency.exponentialRampToValueAtTime(420, t0 + 0.2);
+  }
+  const hg = ctx.createGain();
+  hg.gain.setValueAtTime(0.0001, t0);
+  hg.gain.linearRampToValueAtTime(opening ? 0.11 : 0.13, t0 + 0.035);
+  hg.gain.exponentialRampToValueAtTime(0.0001, t0 + (opening ? 0.36 : 0.26));
+  hiss.connect(bp);
+  bp.connect(hg);
+  hg.connect(master);
+  hiss.start(t0);
+
+  const click = ctx.createOscillator();
+  click.type = "sine";
+  const cAt = opening ? 0.02 : 0.14;
+  click.frequency.setValueAtTime(opening ? 240 : 180, t0 + cAt);
+  click.frequency.exponentialRampToValueAtTime(opening ? 90 : 70, t0 + cAt + 0.08);
+  const cg = ctx.createGain();
+  cg.gain.setValueAtTime(0.0001, t0 + cAt);
+  cg.gain.linearRampToValueAtTime(0.045, t0 + cAt + 0.012);
+  cg.gain.exponentialRampToValueAtTime(0.0001, t0 + cAt + 0.1);
+  click.connect(cg);
+  cg.connect(master);
+  click.start(t0 + cAt);
+  click.stop(t0 + cAt + 0.12);
+}
