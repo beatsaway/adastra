@@ -140,74 +140,171 @@ export function playDoorClose() {
   air.start(t0);
 }
 
-/** Locked hatch — plain access-denied beep (not cute) */
+/** Locked hatch — flat digital alert (two short square buzzes) */
 export function playDoorDenied() {
   const ctx = getAudioCtx();
   if (!ctx) return;
   void resumeAudio();
 
   const t0 = ctx.currentTime;
-  const gain = 0.05;
+  const gain = 0.028;
   const master = ctx.createGain();
   master.gain.value = 1;
   master.connect(ctx.destination);
 
-  // Single short mid buzz, then a lower thud — card-reader reject
-  const osc = ctx.createOscillator();
-  osc.type = "square";
-  osc.frequency.setValueAtTime(180, t0);
-  const lp = ctx.createBiquadFilter();
-  lp.type = "lowpass";
-  lp.frequency.value = 900;
-  const g = ctx.createGain();
-  g.gain.setValueAtTime(0.0001, t0);
-  g.gain.exponentialRampToValueAtTime(gain, t0 + 0.008);
-  g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.11);
-  osc.connect(lp);
-  lp.connect(g);
-  g.connect(master);
-  osc.start(t0);
-  osc.stop(t0 + 0.13);
-
-  const osc2 = ctx.createOscillator();
-  osc2.type = "square";
-  osc2.frequency.setValueAtTime(95, t0 + 0.12);
-  const lp2 = ctx.createBiquadFilter();
-  lp2.type = "lowpass";
-  lp2.frequency.value = 500;
-  const g2 = ctx.createGain();
-  g2.gain.setValueAtTime(0.0001, t0 + 0.12);
-  g2.gain.exponentialRampToValueAtTime(gain * 0.55, t0 + 0.13);
-  g2.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.22);
-  osc2.connect(lp2);
-  lp2.connect(g2);
-  g2.connect(master);
-  osc2.start(t0 + 0.12);
-  osc2.stop(t0 + 0.24);
+  // Same pitch twice, hard on/off — simple system error, not a musical thud
+  const beeps = [0, 0.11];
+  for (const at of beeps) {
+    const t = t0 + at;
+    const osc = ctx.createOscillator();
+    osc.type = "square";
+    osc.frequency.setValueAtTime(440, t);
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.value = 1800;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.setValueAtTime(gain, t + 0.004);
+    g.gain.setValueAtTime(gain, t + 0.055);
+    g.gain.setValueAtTime(0.0001, t + 0.065);
+    osc.connect(lp);
+    lp.connect(g);
+    g.connect(master);
+    osc.start(t);
+    osc.stop(t + 0.08);
+  }
 }
 
-/** Door open — plain access-granted beep (not cute) */
+/** Door open — short digital access-granted chirp (square, not sine/droplet) */
 export function playDoorAuth() {
   const ctx = getAudioCtx();
   if (!ctx) return;
   void resumeAudio();
 
   const t0 = ctx.currentTime;
-  const gain = 0.036;
+  const gain = 0.018;
   const master = ctx.createGain();
   master.gain.value = 1;
   master.connect(ctx.destination);
 
-  // One flat confirmation tone — like a badge reader OK
-  const osc = ctx.createOscillator();
-  osc.type = "sine";
-  osc.frequency.setValueAtTime(740, t0);
-  const g = ctx.createGain();
-  g.gain.setValueAtTime(0.0001, t0);
-  g.gain.exponentialRampToValueAtTime(gain, t0 + 0.01);
-  g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.09);
-  osc.connect(g);
-  g.connect(master);
-  osc.start(t0);
-  osc.stop(t0 + 0.1);
+  // Two stepped square beeps — badge / lockpad OK (hard edges, no sine drip)
+  const steps = [
+    { f: 980, at: 0, dur: 0.055 },
+    { f: 1310, at: 0.06, dur: 0.07 },
+  ];
+  for (const s of steps) {
+    const t = t0 + s.at;
+    const osc = ctx.createOscillator();
+    osc.type = "square";
+    osc.frequency.setValueAtTime(s.f, t);
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.value = 3200;
+    lp.Q.value = 0.7;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(gain, t + 0.006);
+    g.gain.setValueAtTime(gain * 0.85, t + s.dur * 0.55);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + s.dur);
+    osc.connect(lp);
+    lp.connect(g);
+    g.connect(master);
+    osc.start(t);
+    osc.stop(t + s.dur + 0.02);
+  }
+}
+
+/**
+ * Satisfying cyber confirm — door unlock / room SOS restored.
+ * Rising digital ladder + soft bloom + sparkle.
+ */
+export function playCyberSuccess() {
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+  void resumeAudio();
+
+  const t0 = ctx.currentTime;
+  const master = ctx.createGain();
+  master.gain.value = 1;
+  master.connect(ctx.destination);
+
+  // Soft low bloom
+  const bloom = ctx.createOscillator();
+  bloom.type = "sine";
+  bloom.frequency.setValueAtTime(110, t0);
+  bloom.frequency.exponentialRampToValueAtTime(70, t0 + 0.28);
+  const bg = ctx.createGain();
+  bg.gain.setValueAtTime(0.0001, t0);
+  bg.gain.linearRampToValueAtTime(0.055, t0 + 0.04);
+  bg.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.32);
+  bloom.connect(bg);
+  bg.connect(master);
+  bloom.start(t0);
+  bloom.stop(t0 + 0.34);
+
+  // Rising square ladder (access granted)
+  const steps = [
+    { f: 620, at: 0.02, dur: 0.07, g: 0.028 },
+    { f: 880, at: 0.08, dur: 0.07, g: 0.03 },
+    { f: 1170, at: 0.14, dur: 0.08, g: 0.032 },
+    { f: 1560, at: 0.21, dur: 0.14, g: 0.036 },
+  ];
+  for (const s of steps) {
+    const t = t0 + s.at;
+    const osc = ctx.createOscillator();
+    osc.type = "square";
+    osc.frequency.setValueAtTime(s.f, t);
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.setValueAtTime(4200, t);
+    lp.frequency.exponentialRampToValueAtTime(2400, t + s.dur);
+    lp.Q.value = 0.85;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(s.g, t + 0.008);
+    g.gain.setValueAtTime(s.g * 0.75, t + s.dur * 0.45);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + s.dur);
+    osc.connect(lp);
+    lp.connect(g);
+    g.connect(master);
+    osc.start(t);
+    osc.stop(t + s.dur + 0.03);
+  }
+
+  // High shimmer (cyber sparkle)
+  const spark = ctx.createBufferSource();
+  spark.buffer = noiseBuffer(ctx, 0.22, "pink");
+  spark.playbackRate.value = 1.35;
+  const hp = ctx.createBiquadFilter();
+  hp.type = "highpass";
+  hp.frequency.value = 3800;
+  const bp = ctx.createBiquadFilter();
+  bp.type = "bandpass";
+  bp.frequency.setValueAtTime(5200, t0 + 0.12);
+  bp.frequency.exponentialRampToValueAtTime(7800, t0 + 0.28);
+  bp.Q.value = 1.2;
+  const sg = ctx.createGain();
+  sg.gain.setValueAtTime(0.0001, t0 + 0.1);
+  sg.gain.linearRampToValueAtTime(0.022, t0 + 0.16);
+  sg.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.34);
+  spark.connect(hp);
+  hp.connect(bp);
+  bp.connect(sg);
+  sg.connect(master);
+  spark.start(t0 + 0.1);
+  spark.stop(t0 + 0.36);
+
+  // Final resolve ping
+  const ping = ctx.createOscillator();
+  ping.type = "triangle";
+  ping.frequency.setValueAtTime(2090, t0 + 0.3);
+  ping.frequency.exponentialRampToValueAtTime(1680, t0 + 0.48);
+  const pg = ctx.createGain();
+  pg.gain.setValueAtTime(0.0001, t0 + 0.3);
+  pg.gain.linearRampToValueAtTime(0.024, t0 + 0.32);
+  pg.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.52);
+  ping.connect(pg);
+  pg.connect(master);
+  ping.start(t0 + 0.3);
+  ping.stop(t0 + 0.55);
 }

@@ -56,6 +56,10 @@ export class Player {
     this.lookStickY = 0;
     this.mobileSprint = false;
     this.lookLimits = null;
+    /** When true, skip move/look input (year-orb exit transit). */
+    this.inputFrozen = false;
+    /** Touch UI uses sticks only — ignore mouse compat events (tap would yank look). */
+    this.touchLookOnly = false;
     this._euler = new THREE.Euler(0, 0, 0, "YXZ");
     this._onMove = this._onMove.bind(this);
 
@@ -63,7 +67,13 @@ export class Player {
   }
 
   _onMove(e) {
-    if (!this.locked) return;
+    if (!this.locked || this.inputFrozen || this.touchLookOnly) return;
+    // Free cursor (desk bubbles / menus): keep WASD, but don't yank look with mouse
+    if (typeof document !== "undefined" && !document.pointerLockElement) {
+      this._lastClientX = null;
+      this._lastClientY = null;
+      return;
+    }
     // Prefer movementX (pointer lock). Fallback to client delta if lock unavailable.
     let dx = e.movementX;
     let dy = e.movementY;
@@ -124,6 +134,14 @@ export class Player {
 
   update(dt) {
     if (!this.locked) {
+      this._applyCamera();
+      return;
+    }
+    if (this.inputFrozen) {
+      this.stickX = 0;
+      this.stickY = 0;
+      this.lookStickX = 0;
+      this.lookStickY = 0;
       this._applyCamera();
       return;
     }

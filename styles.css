@@ -1,7 +1,38 @@
-/* Match original spacecraftinside fonts */
-@import url("https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&family=Share+Tech+Mono&display=swap");
+/* Self-hosted fonts only (no Google CDN) — match lesson site body/display */
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url("../assets/fonts/ibm-plex-sans-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url("../assets/fonts/ibm-plex-sans-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Sora";
+  font-style: normal;
+  font-weight: 500 700;
+  font-display: swap;
+  src: url("../assets/fonts/sora-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Sora";
+  font-style: normal;
+  font-weight: 500 700;
+  font-display: swap;
+  src: url("../assets/fonts/sora-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
 
-/* Local script font for diner neon (not Google Fonts) */
+/* Local script font for diner neon */
 @font-face {
   font-family: "DinerScript";
   src: url("./fonts/GreatVibes-Regular.ttf") format("truetype");
@@ -24,7 +55,7 @@ body {
   overscroll-behavior: none;
   touch-action: none;
   background: #d8dde4;
-  font-family: "Share Tech Mono", monospace;
+  font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
   color: #2a3340;
 }
 
@@ -58,7 +89,7 @@ canvas {
 }
 
 .eyebrow {
-  font-family: "Orbitron", sans-serif;
+  font-family: "Sora", "IBM Plex Sans", system-ui, sans-serif;
   letter-spacing: 0.35em;
   font-size: 0.72rem;
   color: #5a6a80;
@@ -67,7 +98,7 @@ canvas {
 
 .loader-panel h1,
 .panel h1 {
-  font-family: "Orbitron", sans-serif;
+  font-family: "Sora", "IBM Plex Sans", system-ui, sans-serif;
   font-weight: 700;
   font-size: clamp(1.35rem, 4vw, 1.9rem);
   margin-bottom: 0.85rem;
@@ -116,7 +147,7 @@ canvas {
 }
 
 #start-btn {
-  font-family: "Orbitron", sans-serif;
+  font-family: "Sora", "IBM Plex Sans", system-ui, sans-serif;
   font-size: 0.95rem;
   letter-spacing: 0.08em;
   padding: 0.85rem 1.6rem;
@@ -180,7 +211,7 @@ canvas {
   top: 0;
   z-index: 15;
   transform: translate(-50%, -50%);
-  font-family: "Orbitron", sans-serif;
+  font-family: "Sora", "IBM Plex Sans", system-ui, sans-serif;
   font-weight: 700;
   font-size: 1.45rem;
   letter-spacing: 0.18em;
@@ -198,12 +229,12 @@ canvas {
   display: none;
 }
 
-/* Year archive exit — full-screen white fade */
+/* Year archive exit — full-screen black fade */
 #year-flash {
   position: fixed;
   inset: 0;
   z-index: 10000;
-  background: #fff;
+  background: #000;
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.42s ease-in;
@@ -218,7 +249,7 @@ canvas {
   bottom: 5vh;
   left: 50%;
   transform: translateX(-50%);
-  font-family: "Orbitron", sans-serif;
+  font-family: "Sora", "IBM Plex Sans", system-ui, sans-serif;
   font-size: 0.78rem;
   letter-spacing: 0.06em;
   padding: 0.5rem 0.95rem;
@@ -248,13 +279,13 @@ canvas {
   transform: translateX(-50%);
   bottom: auto;
   z-index: 20;
-  width: 6.5rem;
-  height: 3.4rem;
+  width: 9rem;
+  height: 4.6rem;
   padding: 0;
   border: none;
   border-radius: 0;
   background: transparent;
-  color: rgba(255, 255, 255, 0.3);
+  color: rgba(255, 255, 255, 0.14);
   cursor: pointer;
   box-shadow: none;
   display: flex;
@@ -268,7 +299,7 @@ canvas {
 #help-btn:hover,
 #help-btn:focus-visible {
   background: transparent;
-  color: rgba(255, 255, 255, 0.3);
+  color: rgba(255, 255, 255, 0.22);
 }
 
 /* Downward-pointing triangle (▾) */
@@ -277,20 +308,20 @@ canvas {
   width: 0;
   height: 0;
   margin-top: 0;
-  border-left: 28px solid transparent;
-  border-right: 28px solid transparent;
-  border-top: 34px solid currentColor;
+  border-left: 42px solid transparent;
+  border-right: 42px solid transparent;
+  border-top: 50px solid currentColor;
 }
 
 #display-opt {
   pointer-events: auto;
   position: absolute;
-  top: 2.15rem;
+  top: 3.1rem;
   left: 50%;
   transform: translateX(-50%);
   bottom: auto;
   z-index: 20;
-  font-family: "Orbitron", sans-serif;
+  font-family: "Sora", "IBM Plex Sans", system-ui, sans-serif;
   font-size: 0.72rem;
   letter-spacing: 0.06em;
   color: #2a3648;
@@ -389,7 +420,7 @@ canvas {
   border: 2px solid rgba(255, 255, 255, 0.55);
   background: rgba(30, 40, 55, 0.35);
   color: #fff;
-  font-family: "Orbitron", sans-serif;
+  font-family: "Sora", "IBM Plex Sans", system-ui, sans-serif;
   font-size: 0.58rem;
   letter-spacing: 0.04em;
   touch-action: none;
@@ -422,7 +453,7 @@ canvas {
   }
 
   #display-opt {
-    top: 2.15rem;
+    top: 3.1rem;
     left: 50%;
   }
 
@@ -439,4 +470,155 @@ canvas {
   #mobile-controls {
     display: none !important;
   }
+}
+
+/* Cockpit desk options use 3D aim planes (see ship.js) — CSS bubbles retired */
+
+/* Ship confirm dialogs (door unlock / progress reset) */
+.ship-confirm {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  background: rgba(12, 18, 28, 0.55);
+  pointer-events: auto;
+  touch-action: manipulation;
+}
+
+.ship-confirm-dialog {
+  width: min(92vw, 400px);
+  padding: 1.35rem 1.25rem 1.15rem;
+  text-align: center;
+  background:
+    linear-gradient(165deg, rgba(236, 240, 246, 0.96), rgba(198, 208, 222, 0.94));
+  border: 1px solid rgba(40, 55, 75, 0.35);
+  box-shadow: 0 12px 40px rgba(10, 16, 28, 0.35);
+  font-family: "IBM Plex Sans", sans-serif;
+  color: #1e2733;
+}
+
+.ship-confirm-dialog p {
+  font-size: 1rem;
+  line-height: 1.5;
+  margin-bottom: 0.85rem;
+  font-weight: 400;
+}
+
+.ship-confirm-dialog p:last-of-type {
+  margin-bottom: 1.15rem;
+}
+
+.ship-confirm-dialog strong {
+  color: #b83a3a;
+  font-weight: 700;
+}
+
+.ship-confirm-actions {
+  display: flex;
+  gap: 0.65rem;
+  justify-content: center;
+}
+
+.ship-confirm-yes,
+.ship-confirm-no {
+  min-width: 5.5rem;
+  padding: 0.55rem 1rem;
+  border: 1px solid rgba(30, 40, 55, 0.45);
+  font-family: "Sora", "IBM Plex Sans", system-ui, sans-serif;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.ship-confirm-yes {
+  background: rgba(40, 140, 255, 0.55);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.55);
+}
+
+.ship-confirm-no {
+  background: rgba(30, 40, 55, 0.12);
+  color: #1e2733;
+}
+
+.ship-confirm-yes:hover {
+  background: rgba(40, 140, 255, 0.75);
+}
+
+.ship-confirm-no:hover {
+  background: rgba(30, 40, 55, 0.22);
+}
+
+/* Locked-door unlock confirm (data points spend) — legacy aliases */
+.unlock-confirm {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  background: rgba(12, 18, 28, 0.55);
+  pointer-events: auto;
+  touch-action: manipulation;
+}
+
+.unlock-confirm-dialog {
+  width: min(92vw, 360px);
+  padding: 1.35rem 1.25rem 1.15rem;
+  text-align: center;
+  background:
+    linear-gradient(165deg, rgba(236, 240, 246, 0.96), rgba(198, 208, 222, 0.94));
+  border: 1px solid rgba(40, 55, 75, 0.35);
+  box-shadow: 0 12px 40px rgba(10, 16, 28, 0.35);
+  font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  color: #1e2733;
+}
+
+.unlock-confirm-dialog p {
+  font-size: 0.95rem;
+  line-height: 1.45;
+  margin-bottom: 1.15rem;
+}
+
+.unlock-confirm-dialog strong {
+  color: #b83a3a;
+  font-weight: 700;
+}
+
+.unlock-confirm-actions {
+  display: flex;
+  gap: 0.65rem;
+  justify-content: center;
+}
+
+.unlock-confirm-yes,
+.unlock-confirm-no {
+  min-width: 5.5rem;
+  padding: 0.55rem 1rem;
+  border: 1px solid rgba(30, 40, 55, 0.45);
+  font-family: "Sora", "IBM Plex Sans", system-ui, sans-serif;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.unlock-confirm-yes {
+  background: rgba(40, 140, 255, 0.55);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.55);
+}
+
+.unlock-confirm-no {
+  background: rgba(30, 40, 55, 0.12);
+  color: #1e2733;
+}
+
+.unlock-confirm-yes:hover {
+  background: rgba(40, 140, 255, 0.75);
+}
+
+.unlock-confirm-no:hover {
+  background: rgba(30, 40, 55, 0.22);
 }

@@ -1,12 +1,22 @@
 import * as THREE from "three";
-import { buildShip, createSpaceView, createStatusView, updateAutoDoors, updateStallDoors, nearestInteractable, nearestLockedDoor, LOCKED_DOOR_LINES, updateSosLights, updatePlants, downgradeMaterialsForMobile } from "./ship.js?v=20260815m";
-import { Player } from "./player.js";
+import { buildShip, createSpaceView, createStatusView, updateAutoDoors, updateStallDoors, nearestInteractable, nearestLockedDoor, LOCKED_DOOR_LINES, INSUFFICIENT_DATAPOINT_LINES, pickRoomRestoredLine, updateSosLights, updatePlants, updateSleepingCrew, downgradeMaterialsForMobile, unlockShipDoor, relockAllShipDoors, clearShipBriefingProgress, debugWallMonitor, resetAllRoomSos, applyWallMonitorVisual, setWallMonitorSosBlend } from "./ship.js?v=20260815bh";
+import { Player } from "./player.js?v=20260815ai";
 import { isTouchDevice, setupMobileControls } from "./mobile.js";
 import { HudPrompt } from "./hud-prompt.js";
+import {
+  DOOR_UNLOCK_COST,
+  MONITOR_DEBUG_COST,
+  fetchCollectedDatapoints,
+  getSpentDatapoints,
+  addSpentDatapoints,
+  availableDatapoints,
+  clearShipDatapointUsage,
+  markMonitorDebugged,
+} from "./datapoints.js?v=adastra1000";
 import { ShipScenes, SCENE } from "./scenes.js";
 import { shipVoice } from "./ai-voice.js";
 import { createAiDrone } from "./ai-drone.js";
-import { ShipAmbience, ProximityTransformerHum, playDoorOpen, playDoorClose, playDoorDenied, playDoorAuth, resumeAudio, playYearReveal, playYearCollapse, playYearHover, playYearPick } from "../sfx/index.js";
+import { ShipAmbience, ProximityTransformerHum, InfoHubHoloHiss, playDoorOpen, playDoorClose, playDoorDenied, playDoorAuth, playCyberSuccess, playHoloHover, resumeAudio, playYearReveal, playYearCollapse, playYearHover, playYearPick } from "../sfx/index.js?v=20260815be";
 
 const loaderEl = document.getElementById("loader");
 const loadBar = document.getElementById("load-bar");
@@ -49,11 +59,38 @@ function exitAppFullscreen() {
     document.exitFullscreen ||
     document.webkitExitFullscreen ||
     document.msExitFullscreen;
-  if (!exit) return;
+  if (!exit) return Promise.resolve();
   try {
     const p = exit.call(document);
-    if (p && typeof p.catch === "function") p.catch(() => {});
+    if (p && typeof p.then === "function") return p.catch(() => {});
   } catch (_) {}
+  return Promise.resolve();
+}
+
+/** Leave fullscreen (if any), then navigate — year orbs must not stay in FS. */
+function navigateAfterLeavingFullscreen(href) {
+  const go = () => {
+    window.location.href = href;
+  };
+  if (!isAppFullscreen()) {
+    go();
+    return;
+  }
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    document.removeEventListener("fullscreenchange", finish);
+    document.removeEventListener("webkitfullscreenchange", finish);
+    go();
+  };
+  document.addEventListener("fullscreenchange", finish);
+  document.addEventListener("webkitfullscreenchange", finish);
+  Promise.resolve(exitAppFullscreen()).finally(() => {
+    if (!isAppFullscreen()) finish();
+    else setTimeout(finish, 180);
+  });
+  setTimeout(finish, 500);
 }
 
 function syncDisplayOptLabel() {
@@ -72,9 +109,9 @@ function wait(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function toggleMainScreen(ship) {
+function setMainScreenMode(ship, mode) {
   const ud = ship.mainScreen.userData;
-  const next = ud.mode === "default" ? "outside" : "default";
+  const next = mode === "outside" ? "outside" : "default";
   ud.mode = next;
   const mesh = ud.screenMesh;
   if (next === "outside") {
@@ -84,6 +121,11 @@ function toggleMainScreen(ship) {
     mesh.material = ud.statusMat || ud.defaultMat;
     ud.deco.visible = false;
   }
+}
+
+function toggleMainScreen(ship) {
+  const ud = ship.mainScreen.userData;
+  setMainScreenMode(ship, ud.mode === "default" ? "outside" : "default");
 }
 
 async function boot() {
@@ -127,9 +169,11 @@ async function boot() {
   setProgress(42, "Loading…");
   try {
     await document.fonts.load('400 200px "DinerScript"');
+    await document.fonts.load('600 64px "Sora"');
+    await document.fonts.load('400 48px "IBM Plex Sans"');
     await document.fonts.ready;
   } catch (_) {
-    /* canvas falls back to cursive if local face fails */
+    /* canvas falls back if local face fails */
   }
 
   setProgress(48, "Loading…");
@@ -166,6 +210,7 @@ async function boot() {
   await wait(40);
 
   const player = new Player(camera, ship.colliders, ship.spawn);
+  if (touchMode) player.touchLookOnly = true;
   if (ship.spawnYaw != null) player.yaw = ship.spawnYaw;
   setProgress(86, "Loading…");
 
@@ -212,6 +257,7 @@ async function boot() {
   const scenes = new ShipScenes({ player });
   const ambience = new ShipAmbience();
   const boxHum = new ProximityTransformerHum();
+  const hubHoloHiss = new InfoHubHoloHiss();
   const aiDrone = createAiDrone(camera, { touchMode });
 
   function roomAtPlayer() {
@@ -234,19 +280,20 @@ async function boot() {
     const yaw = ship.spawnYaw ?? Math.PI;
     player.yaw = yaw;
     player.pitch = -0.12;
-    // While script plays: keep view on the big screen (can't turn to the door)
-    player.setLookLimits({
-      yawCenter: yaw,
-      yawRange: 0.55,
-      pitchMin: -0.5,
-      pitchMax: 0.12,
-    });
+    // Full look freedom during Scene 1 (doors stay sealed via scene bounds)
+    player.setLookLimits(null);
     player.update(0);
     scenes.start(SCENE.COCKPIT_BRIEFING);
     const ud = ship.mainScreen.userData;
     ud.mode = "default";
     ud.screenMesh.material = ud.statusMat || ud.defaultMat;
     ud.deco.visible = false;
+    // Scene 1 starts automatically — no need to walk up to the desk
+    if (ud.statusView?.needsAlertStart?.()) {
+      ud.statusView.beginBriefing();
+      hudPrompt.clearDialogue("ai-brief");
+      hudPrompt.refresh();
+    }
   }
 
   function syncScene1FromBriefing() {
@@ -264,6 +311,14 @@ async function boot() {
     return Math.hypot(dx, dz) < 5.6;
   }
 
+  function nearDeskOptions() {
+    const p = ship.deskPos;
+    if (!p) return false;
+    const dx = player.position.x - p.x;
+    const dz = player.position.z - p.z;
+    return Math.hypot(dx, dz) < 5.5;
+  }
+
   function nearHubBeacon() {
     const b = ship.hubBeacon;
     if (!b) return false;
@@ -277,6 +332,20 @@ async function boot() {
   /** Sticky AI line while standing at a sealed door (reroll when leaving / switching doors). */
   let lockedDoorKey = null;
   let lockedDoorLine = null;
+  let collectedDatapoints = 0;
+  let hoveredUnlockDoor = null;
+  let hoveredDeskOption = null;
+  /** @type {{ door: object, holo: object, t: number, startY: number } | null} */
+  let unlockVaporFx = null;
+  /** @type {{ door: object, holo: object, t: number, dur: number } | null} */
+  let unlockDenyFx = null;
+  /** @type {object | null} */
+  let hoveredDebugMonitor = null;
+  /** @type {{ wm: object, t: number, dur: number, bar: object, barMat: object, fullW: number } | null} */
+  let debugTweenFx = null;
+  const unlockRaycaster = new THREE.Raycaster();
+  const unlockNdc = new THREE.Vector2(0, 0);
+  const holoWorldPos = new THREE.Vector3();
   let wasHubNear = false;
   /** @type {object | null} */
   let lastAimedYear = null;
@@ -301,6 +370,13 @@ async function boot() {
     if (!hit?.href) return false;
     if (!hub.beginYearPick?.(hit)) return true;
     playYearPick();
+    // Freeze look/move for the transit. Exit fullscreen only at navigate —
+    // early exit on mobile portrait resizes the viewport and yanks the camera.
+    player.inputFrozen = true;
+    player.stickX = 0;
+    player.stickY = 0;
+    player.lookStickX = 0;
+    player.lookStickY = 0;
     yearTransit = { href: hit.href, elapsed: 0, phase: "spin" };
     return true;
   }
@@ -315,18 +391,716 @@ async function boot() {
     } else if (yearTransit.phase === "flash" && yearTransit.elapsed >= 0.48) {
       const href = yearTransit.href;
       yearTransit = null;
-      window.location.href = href;
+      navigateAfterLeavingFullscreen(href);
     }
   }
 
+  // Back/forward (bfcache) restores black flash + locked year pick — clear both.
+  window.addEventListener("pageshow", () => {
+    yearFlashEl?.classList.remove("on");
+    yearTransit = null;
+    player.inputFrozen = false;
+    ship.hubBeacon?.clearYearPick?.();
+  });
+
   function tryStartBriefingByProximity() {
+    // Kept as a safety net; Scene 1 now auto-starts on enter.
     const ud = ship.mainScreen.userData;
     if (ud.mode !== "default" || !ud.statusView?.needsAlertStart?.()) return false;
-    if (!nearMainScreen()) return false;
     ud.statusView.beginBriefing();
     hudPrompt.clearDialogue("ai-brief");
     hudPrompt.refresh();
     return true;
+  }
+
+  function syncConsoleDatapoints() {
+    const used = getSpentDatapoints();
+    const avail = availableDatapoints(collectedDatapoints, used);
+    ship.mainScreen?.userData?.statusView?.setDatapointStats?.(used, avail);
+  }
+
+  async function refreshCollectedDatapoints() {
+    collectedDatapoints = await fetchCollectedDatapoints();
+    syncConsoleDatapoints();
+  }
+
+  function closeShipDialog(id) {
+    const el = document.getElementById(id);
+    if (el) el.remove();
+  }
+
+  function anyShipDialogOpen() {
+    return !!(
+      document.getElementById("unlock-confirm") ||
+      document.getElementById("reset-confirm") ||
+      document.getElementById("debug-confirm")
+    );
+  }
+
+  function closeUnlockConfirm() {
+    closeShipDialog("unlock-confirm");
+  }
+
+  function closeResetConfirm() {
+    closeShipDialog("reset-confirm");
+  }
+
+  function closeDebugConfirm() {
+    closeShipDialog("debug-confirm");
+  }
+
+  function showUnlockConfirm(door) {
+    if (!door?.locked || unlockVaporFx) return;
+    closeUnlockConfirm();
+    closeResetConfirm();
+    setUnlockHover(null);
+    // Free the cursor so Yes/No can be clicked
+    try {
+      if (document.pointerLockElement) document.exitPointerLock();
+    } catch (_) {}
+
+    const wrap = document.createElement("div");
+    wrap.id = "unlock-confirm";
+    wrap.className = "ship-confirm";
+    wrap.innerHTML =
+      '<div class="ship-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="unlock-confirm-title">' +
+      '<p id="unlock-confirm-title">Do you want to spend <strong>' +
+      DOOR_UNLOCK_COST +
+      " data</strong> to unlock this?</p>" +
+      '<div class="ship-confirm-actions">' +
+      '<button type="button" class="ship-confirm-yes" id="unlock-confirm-yes">Yes</button>' +
+      '<button type="button" class="ship-confirm-no" id="unlock-confirm-no">No</button>' +
+      "</div></div>";
+    wrap.addEventListener("click", (e) => {
+      if (e.target === wrap) closeUnlockConfirm();
+    });
+    document.body.appendChild(wrap);
+    document.getElementById("unlock-confirm-no")?.addEventListener("click", () => {
+      closeUnlockConfirm();
+      if (!touchMode) {
+        try {
+          renderer.domElement.requestPointerLock();
+        } catch (_) {}
+      }
+    });
+    document.getElementById("unlock-confirm-yes")?.addEventListener("click", () => {
+      closeUnlockConfirm();
+      beginUnlockWithVapor(door);
+      if (!touchMode) {
+        try {
+          renderer.domElement.requestPointerLock();
+        } catch (_) {}
+      }
+    });
+    try {
+      document.getElementById("unlock-confirm-yes")?.focus();
+    } catch (_) {}
+  }
+
+  function showResetConfirm() {
+    if (anyShipDialogOpen() && document.getElementById("reset-confirm")) return;
+    closeUnlockConfirm();
+    closeResetConfirm();
+    setUnlockHover(null);
+    try {
+      if (document.pointerLockElement) document.exitPointerLock();
+    } catch (_) {}
+
+    const wrap = document.createElement("div");
+    wrap.id = "reset-confirm";
+    wrap.className = "ship-confirm";
+    wrap.innerHTML =
+      '<div class="ship-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="reset-confirm-title">' +
+      '<p id="reset-confirm-title"><strong>Reset ship progress?</strong></p>' +
+      "<p>This resets everything in your ship except the available data points you've collected.</p>" +
+      '<div class="ship-confirm-actions">' +
+      '<button type="button" class="ship-confirm-yes" id="reset-confirm-yes">Reset</button>' +
+      '<button type="button" class="ship-confirm-no" id="reset-confirm-no">Cancel</button>' +
+      "</div></div>";
+    wrap.addEventListener("click", (e) => {
+      if (e.target === wrap) closeResetConfirm();
+    });
+    document.body.appendChild(wrap);
+    document.getElementById("reset-confirm-no")?.addEventListener("click", () => {
+      closeResetConfirm();
+      if (!touchMode) {
+        try {
+          renderer.domElement.requestPointerLock();
+        } catch (_) {}
+      }
+    });
+    document.getElementById("reset-confirm-yes")?.addEventListener("click", () => {
+      closeResetConfirm();
+      performShipReset();
+    });
+    try {
+      document.getElementById("reset-confirm-no")?.focus();
+    } catch (_) {}
+  }
+
+  function performShipReset() {
+    unlockVaporFx = null;
+    clearUnlockDenyFx(true);
+    clearDebugTween();
+    closeDebugConfirm();
+    hoveredUnlockDoor = null;
+    hoveredDebugMonitor = null;
+    hoveredDeskOption = null;
+    lockedDoorKey = null;
+    lockedDoorLine = null;
+    // Ship usage only — collected exercise datapoints stay on the server / scores API
+    clearShipDatapointUsage();
+    clearShipBriefingProgress();
+    relockAllShipDoors(ship.autoDoors);
+    resetAllRoomSos(ship.anim);
+    const ud = ship.mainScreen.userData;
+    ud.statusView?.reset?.();
+    setMainScreenMode(ship, "default");
+    syncConsoleDatapoints();
+    beginScene1();
+    ud.statusView?.start?.();
+    syncScene1FromBriefing();
+    if (!touchMode) {
+      try {
+        renderer.domElement.requestPointerLock();
+      } catch (_) {}
+    }
+  }
+
+  function pickInsufficientLine() {
+    const list = INSUFFICIENT_DATAPOINT_LINES;
+    if (!list?.length) {
+      return "Insufficient data points. Restore more of my archive, Captain.";
+    }
+    return list[(Math.random() * list.length) | 0];
+  }
+
+  function clearUnlockDenyFx(restore = true) {
+    const fx = unlockDenyFx;
+    unlockDenyFx = null;
+    if (!restore || !fx?.holo) return;
+    const h = fx.holo;
+    if (h.material) {
+      h.material.color.setRGB(1, 1, 1);
+      if (h.userData.baseMap) h.material.map = h.userData.baseMap;
+      h.material.opacity = h.userData.baseOpacity ?? 0.22;
+      h.material.needsUpdate = true;
+    }
+    h.visible = true;
+  }
+
+  /** Insufficient balance: VO line + rapid red glitch on unlock text. */
+  function denyInsufficientUnlock(door) {
+    playDoorDenied();
+    shipVoice.trySpeak(pickInsufficientLine());
+    const holo = door?.unlockHolo;
+    if (!holo?.material || unlockVaporFx) return;
+    if (hoveredUnlockDoor === door) hoveredUnlockDoor = null;
+    clearUnlockDenyFx(true);
+    if (holo.userData.baseMap) {
+      holo.material.map = holo.userData.baseMap;
+      holo.material.needsUpdate = true;
+    }
+    unlockDenyFx = {
+      door,
+      holo,
+      t: 0,
+      dur: 0.9,
+    };
+  }
+
+  function updateUnlockDeny(dt) {
+    if (!unlockDenyFx) return;
+    const fx = unlockDenyFx;
+    fx.t += dt;
+    const h = fx.holo;
+    if (!h?.material) {
+      unlockDenyFx = null;
+      return;
+    }
+    // Fast chaotic on/off + deepen red hue
+    const flickerOn =
+      Math.sin(fx.t * 62) > 0.12 ||
+      Math.sin(fx.t * 103 + 1.7) > 0.45 ||
+      Math.sin(fx.t * 151) > 0.7;
+    const u = Math.min(1, fx.t / fx.dur);
+    const redPush = 1 - u * 0.35;
+    h.material.color.setRGB(1, 0.22 * (1 - redPush * 0.85), 0.18 * (1 - redPush * 0.9));
+    if (flickerOn) {
+      h.visible = true;
+      h.material.opacity = 0.45 + Math.random() * 0.55;
+    } else {
+      h.visible = Math.random() > 0.55;
+      h.material.opacity = 0.04 + Math.random() * 0.12;
+    }
+    if (fx.t >= fx.dur) {
+      clearUnlockDenyFx(true);
+    }
+  }
+
+  function beginUnlockWithVapor(door) {
+    if (!door?.locked || unlockVaporFx) return;
+    const used = getSpentDatapoints();
+    const avail = availableDatapoints(collectedDatapoints, used);
+    if (avail < DOOR_UNLOCK_COST) {
+      denyInsufficientUnlock(door);
+      return;
+    }
+
+    clearUnlockDenyFx(true);
+    const holo = door.unlockHolo;
+    if (holo?.material) {
+      if (holo.userData.hoverMap) {
+        holo.material.map = holo.userData.hoverMap;
+        holo.material.needsUpdate = true;
+      }
+      holo.material.color.setRGB(1, 1, 1);
+      holo.material.opacity = holo.userData.flashOpacity ?? 1;
+      unlockVaporFx = {
+        door,
+        holo,
+        t: 0,
+        startY: holo.position.y,
+      };
+      if (hoveredUnlockDoor === door) hoveredUnlockDoor = null;
+    } else {
+      finishDoorUnlock(door);
+    }
+  }
+
+  function finishDoorUnlock(door) {
+    if (!door?.locked) return;
+    addSpentDatapoints(DOOR_UNLOCK_COST);
+    unlockShipDoor(door);
+    playCyberSuccess();
+    syncConsoleDatapoints();
+    lockedDoorKey = null;
+    lockedDoorLine = null;
+    if (hoveredUnlockDoor === door) hoveredUnlockDoor = null;
+    shipVoice.trySpeak("Door unlock authorized. Data points spent.");
+  }
+
+  function updateUnlockVapor(dt) {
+    if (!unlockVaporFx) return;
+    const fx = unlockVaporFx;
+    fx.t += dt;
+    const dur = 0.7;
+    const u = Math.min(1, fx.t / dur);
+    // Ease-out upward drift + fade (cheap: one mesh, no particles)
+    const ease = 1 - Math.pow(1 - u, 2);
+    const holo = fx.holo;
+    if (holo) {
+      holo.position.y = fx.startY + ease * 0.9;
+      if (holo.material) {
+        holo.material.opacity = (holo.userData.flashOpacity ?? 1) * (1 - ease);
+      }
+      const s = 1 + ease * 0.2;
+      holo.scale.set(s, 1 + ease * 0.35, 1);
+    }
+    if (u >= 1) {
+      if (holo) holo.visible = false;
+      unlockVaporFx = null;
+      finishDoorUnlock(fx.door);
+    }
+  }
+
+  function tryUnlockSealedDoor(door) {
+    if (!door?.locked || unlockVaporFx) return false;
+    if (anyShipDialogOpen()) return false;
+    const used = getSpentDatapoints();
+    const avail = availableDatapoints(collectedDatapoints, used);
+    if (avail < DOOR_UNLOCK_COST) {
+      denyInsufficientUnlock(door);
+      return false;
+    }
+    showUnlockConfirm(door);
+    return true;
+  }
+
+  function unlockHoloMeshes() {
+    const out = [];
+    for (const d of ship.autoDoors || []) {
+      if (d?.locked && d.unlockHolo?.visible) out.push(d.unlockHolo);
+    }
+    return out;
+  }
+
+  function doorFromUnlockHit(obj) {
+    let o = obj;
+    while (o) {
+      if (o.userData?.unlockHolo || o.userData?.doorKey) {
+        const key = o.userData.doorKey;
+        if (key) {
+          return (ship.autoDoors || []).find((d) => d.key === key) || null;
+        }
+      }
+      o = o.parent;
+    }
+    // Fallback: match mesh reference
+    for (const d of ship.autoDoors || []) {
+      if (d.unlockHolo === obj || d.unlockHolo?.uuid === obj?.uuid) return d;
+    }
+    return null;
+  }
+
+  function pickUnlockDoor(clientX, clientY) {
+    if (clientX == null || clientY == null) {
+      unlockNdc.set(0, 0);
+    } else {
+      const rect = renderer.domElement.getBoundingClientRect();
+      unlockNdc.set(
+        ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
+        -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1
+      );
+    }
+    unlockRaycaster.setFromCamera(unlockNdc, camera);
+    unlockRaycaster.far = 4.2;
+    const meshes = unlockHoloMeshes();
+    if (!meshes.length) return null;
+    const hits = unlockRaycaster.intersectObjects(meshes, false);
+    unlockRaycaster.far = Infinity;
+    if (!hits.length) return null;
+    // Must actually hit the unlock plane (crosshair / finger on the text)
+    if (hits[0].distance > 4.2) return null;
+    return doorFromUnlockHit(hits[0].object);
+  }
+
+  function setUnlockHover(door) {
+    if (unlockVaporFx || unlockDenyFx || anyShipDialogOpen()) return;
+    if (hoveredUnlockDoor && hoveredUnlockDoor !== door && hoveredUnlockDoor.unlockHolo) {
+      const h = hoveredUnlockDoor.unlockHolo;
+      const m = h.material;
+      if (m) {
+        if (h.userData.baseMap) m.map = h.userData.baseMap;
+        m.color.setRGB(1, 1, 1);
+        m.opacity = h.userData.baseOpacity ?? 0.22;
+        m.needsUpdate = true;
+      }
+    }
+    if (door && door !== hoveredUnlockDoor) playHoloHover();
+    hoveredUnlockDoor = door || null;
+    if (door?.unlockHolo?.material) {
+      const h = door.unlockHolo;
+      if (h.userData.hoverMap) h.material.map = h.userData.hoverMap;
+      h.material.color.setRGB(1, 1, 1);
+      h.material.opacity = h.userData.hoverOpacity ?? 0.95;
+      h.material.needsUpdate = true;
+    }
+  }
+
+  function deskOptionMeshes() {
+    const items = ship.deskOptions?.items;
+    if (!items?.length || !ship.deskOptions?.group?.visible) return [];
+    const out = [];
+    for (const it of items) {
+      if (it.hit) out.push(it.hit);
+      else if (it.mesh) out.push(it.mesh);
+    }
+    return out;
+  }
+
+  function pickDeskOption(clientX, clientY) {
+    if (!ship.deskOptions?.group?.visible) return null;
+    if (clientX == null || clientY == null) {
+      unlockNdc.set(0, 0);
+    } else {
+      const rect = renderer.domElement.getBoundingClientRect();
+      unlockNdc.set(
+        ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
+        -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1
+      );
+    }
+    unlockRaycaster.setFromCamera(unlockNdc, camera);
+    const meshes = deskOptionMeshes();
+    if (!meshes.length) return null;
+    const hits = unlockRaycaster.intersectObjects(meshes, false);
+    if (!hits.length) return null;
+    return hits[0].object?.userData?.optionId || null;
+  }
+
+  function setDeskHover(optionId) {
+    if (anyShipDialogOpen()) return;
+    if (optionId && optionId !== hoveredDeskOption) playHoloHover();
+    const items = ship.deskOptions?.items || [];
+    for (const it of items) {
+      const visual = it.mesh;
+      const m = visual?.material;
+      if (!m) continue;
+      const base = visual.userData.baseOpacity ?? 0.4;
+      const hover = visual.userData.hoverOpacity ?? 0.95;
+      m.opacity = it.id === optionId ? hover : base;
+    }
+    hoveredDeskOption = optionId || null;
+  }
+
+  function activateDeskOption(optionId) {
+    if (!optionId || anyShipDialogOpen()) return false;
+    if (optionId === "outside") {
+      setMainScreenMode(ship, "outside");
+      return true;
+    }
+    if (optionId === "console") {
+      setMainScreenMode(ship, "default");
+      return true;
+    }
+    if (optionId === "reset") {
+      showResetConfirm();
+      return true;
+    }
+    return false;
+  }
+
+  function updateDeskOptionsVisibility() {
+    const group = ship.deskOptions?.group;
+    if (!group) return;
+    const status = ship.mainScreen.userData.statusView;
+    const show =
+      player.locked &&
+      nearDeskOptions() &&
+      !!status?.complete &&
+      !scenes.isActive(SCENE.COCKPIT_BRIEFING);
+    group.visible = show;
+    if (!show && hoveredDeskOption) setDeskHover(null);
+  }
+
+  function tryDebugWallMonitor(wm) {
+    if (!wm || wm.debugged || wm.repairing) return false;
+    if (wm.room?.userData?.lightMode !== "sos") return false;
+    if (debugTweenFx) return false;
+    const used = getSpentDatapoints();
+    const avail = availableDatapoints(collectedDatapoints, used);
+    if (avail < MONITOR_DEBUG_COST) {
+      playDoorDenied();
+      shipVoice.trySpeak(pickInsufficientLine());
+      return true;
+    }
+    showDebugConfirm(wm);
+    return true;
+  }
+
+  function showDebugConfirm(wm) {
+    if (!wm || wm.debugged || wm.repairing) return;
+    closeUnlockConfirm();
+    closeResetConfirm();
+    closeDebugConfirm();
+    setDebugMonitorHover(null);
+    setUnlockHover(null);
+    try {
+      if (document.pointerLockElement) document.exitPointerLock();
+    } catch (_) {}
+
+    const wrap = document.createElement("div");
+    wrap.id = "debug-confirm";
+    wrap.className = "ship-confirm";
+    wrap.innerHTML =
+      '<div class="ship-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="debug-confirm-title">' +
+      '<p id="debug-confirm-title">Do you want to spend <strong>' +
+      MONITOR_DEBUG_COST +
+      " data points</strong> to debug this monitor?</p>" +
+      '<div class="ship-confirm-actions">' +
+      '<button type="button" class="ship-confirm-yes" id="debug-confirm-yes">Yes</button>' +
+      '<button type="button" class="ship-confirm-no" id="debug-confirm-no">No</button>' +
+      "</div></div>";
+    wrap.addEventListener("click", (e) => {
+      if (e.target === wrap) closeDebugConfirm();
+    });
+    document.body.appendChild(wrap);
+    document.getElementById("debug-confirm-no")?.addEventListener("click", () => {
+      closeDebugConfirm();
+      if (!touchMode) {
+        try {
+          renderer.domElement.requestPointerLock();
+        } catch (_) {}
+      }
+    });
+    document.getElementById("debug-confirm-yes")?.addEventListener("click", () => {
+      closeDebugConfirm();
+      beginDebugRepair(wm);
+      if (!touchMode) {
+        try {
+          renderer.domElement.requestPointerLock();
+        } catch (_) {}
+      }
+    });
+    try {
+      document.getElementById("debug-confirm-yes")?.focus();
+    } catch (_) {}
+  }
+
+  function beginDebugRepair(wm) {
+    if (!wm || wm.debugged || wm.repairing || debugTweenFx) return;
+    const used = getSpentDatapoints();
+    const avail = availableDatapoints(collectedDatapoints, used);
+    if (avail < MONITOR_DEBUG_COST) {
+      playDoorDenied();
+      shipVoice.trySpeak(pickInsufficientLine());
+      return;
+    }
+    addSpentDatapoints(MONITOR_DEBUG_COST);
+    markMonitorDebugged(wm.id);
+    playDoorAuth();
+    syncConsoleDatapoints();
+    setDebugMonitorHover(null);
+
+    wm.repairing = true;
+    if (wm.debugHolo) wm.debugHolo.visible = false;
+
+    const fullW = Math.max(0.55, Math.min(2.4, (wm.maxW || 1.6) * 0.78));
+    const barY = -Math.max(0.18, (wm.maxH || 0.9) * 0.28);
+    const barMat = new THREE.MeshBasicMaterial({
+      color: 0x5ffbf1,
+      transparent: true,
+      opacity: 0.95,
+      depthWrite: false,
+      depthTest: true,
+      toneMapped: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -6,
+      polygonOffsetUnits: -6,
+    });
+    const bar = new THREE.Mesh(new THREE.PlaneGeometry(fullW, 0.065), barMat);
+    bar.scale.x = 0.001;
+    bar.position.set(fullW * (0.001 - 1) * 0.5, barY, 0.082);
+    bar.renderOrder = 8;
+    wm.group.add(bar);
+
+    debugTweenFx = {
+      wm,
+      t: 0,
+      dur: 1.45,
+      bar,
+      barMat,
+      fullW,
+      barY,
+    };
+  }
+
+  function updateDebugRepair(dt) {
+    if (!debugTweenFx) return;
+    const fx = debugTweenFx;
+    fx.t += dt;
+    const u = Math.min(1, fx.t / fx.dur);
+    const ease = u * u * (3 - 2 * u);
+    setWallMonitorSosBlend(fx.wm, ease);
+    if (fx.bar) {
+      fx.bar.scale.x = Math.max(0.001, ease);
+      fx.bar.position.x = fx.fullW * (ease - 1) * 0.5;
+      fx.bar.position.y = fx.barY;
+      // Bar shifts orange → cyan with the panel
+      const r = 1 - ease * 0.55;
+      const g = 0.48 + ease * 0.5;
+      const b = 0.2 + ease * 0.75;
+      fx.barMat.color.setRGB(r, g, b);
+    }
+    if (u >= 1) {
+      finishDebugRepair(fx);
+    }
+  }
+
+  function finishDebugRepair(fx) {
+    const wm = fx.wm;
+    if (fx.bar) {
+      try {
+        wm.group?.remove(fx.bar);
+        fx.bar.geometry?.dispose?.();
+        fx.barMat?.dispose?.();
+      } catch (_) {}
+    }
+    debugTweenFx = null;
+    wm.repairing = false;
+    const result = debugWallMonitor(wm, ship.anim);
+    if (result.roomCleared) {
+      playCyberSuccess();
+      shipVoice.trySpeak(pickRoomRestoredLine(result.roomName));
+    } else {
+      shipVoice.trySpeak("Monitor debug accepted. Panel restored to nominal.");
+    }
+  }
+
+  function clearDebugTween() {
+    if (!debugTweenFx) return;
+    const fx = debugTweenFx;
+    if (fx.bar) {
+      try {
+        fx.wm.group?.remove(fx.bar);
+        fx.bar.geometry?.dispose?.();
+        fx.barMat?.dispose?.();
+      } catch (_) {}
+    }
+    if (fx.wm) fx.wm.repairing = false;
+    debugTweenFx = null;
+  }
+
+  function debugHoloMeshes() {
+    const out = [];
+    for (const wm of ship.anim?.wallMonitors || []) {
+      const h = wm.debugHolo;
+      if (h?.visible && !wm.debugged && !wm.repairing && wm.room?.userData?.lightMode === "sos") {
+        out.push(h);
+      }
+    }
+    return out;
+  }
+
+  function monitorFromDebugHit(obj) {
+    let o = obj;
+    while (o) {
+      const id = o.userData?.monitorId;
+      if (id) {
+        return (ship.anim?.wallMonitors || []).find((m) => m.id === id) || null;
+      }
+      if (o.userData?.debugHolo) break;
+      o = o.parent;
+    }
+    for (const wm of ship.anim?.wallMonitors || []) {
+      if (wm.debugHolo === obj || wm.debugHolo?.uuid === obj?.uuid) return wm;
+    }
+    return null;
+  }
+
+  function pickDebugMonitor(clientX, clientY) {
+    if (clientX == null || clientY == null) {
+      unlockNdc.set(0, 0);
+    } else {
+      const rect = renderer.domElement.getBoundingClientRect();
+      unlockNdc.set(
+        ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
+        -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1
+      );
+    }
+    unlockRaycaster.setFromCamera(unlockNdc, camera);
+    unlockRaycaster.far = 4.6;
+    const meshes = debugHoloMeshes();
+    if (!meshes.length) {
+      unlockRaycaster.far = Infinity;
+      return null;
+    }
+    const hits = unlockRaycaster.intersectObjects(meshes, false);
+    unlockRaycaster.far = Infinity;
+    if (!hits.length || hits[0].distance > 4.6) return null;
+    return monitorFromDebugHit(hits[0].object);
+  }
+
+  function setDebugMonitorHover(wm) {
+    if (anyShipDialogOpen()) return;
+    if (hoveredDebugMonitor && hoveredDebugMonitor !== wm && hoveredDebugMonitor.debugHolo) {
+      const h = hoveredDebugMonitor.debugHolo;
+      if (h.material) {
+        if (h.userData.baseMap) h.material.map = h.userData.baseMap;
+        h.material.color.setRGB(1, 1, 1);
+        h.material.opacity = h.userData.baseOpacity ?? 0.55;
+        h.material.needsUpdate = true;
+      }
+    }
+    if (wm && wm !== hoveredDebugMonitor) playHoloHover();
+    hoveredDebugMonitor = wm || null;
+    if (wm?.debugHolo?.material) {
+      const h = wm.debugHolo;
+      if (h.userData.hoverMap) h.material.map = h.userData.hoverMap;
+      h.material.color.setRGB(1, 1, 1);
+      h.material.opacity = h.userData.hoverOpacity ?? 0.98;
+      h.material.needsUpdate = true;
+    }
   }
 
   function doInteract() {
@@ -343,11 +1117,9 @@ async function boot() {
 
     if (!player.locked) return;
     const stall = nearestInteractable(ship.interactables, player.position);
-    if (stall) {
-      stall.toggle();
-      return;
-    }
-    if (nearMainScreen()) toggleMainScreen(ship);
+    if (!stall || stall.kind === "wallMonitor") return;
+    stall.toggle();
+    // Main screen modes = desk 3D option planes (crosshair click)
   }
 
   const mobile = touchMode
@@ -366,10 +1138,12 @@ async function boot() {
     void resumeAudio().then(() => {
       ambience.start();
       void boxHum.ensure();
+      void hubHoloHiss.ensure();
     });
     // Enter Ship → Scene 1 (cockpit lockdown until briefing completes)
     beginScene1();
     ship.mainScreen.userData.statusView?.start?.();
+    void refreshCollectedDatapoints();
     // If the script was already finished earlier, Scene 1 ends immediately
     syncScene1FromBriefing();
     displayOpt?.classList.add("hidden");
@@ -379,6 +1153,8 @@ async function boot() {
       player.setLocked(true);
       mobile?.show();
     } else {
+      // WASD stays on after enter even if the cursor is free for desk UI
+      player.setLocked(true);
       renderer.domElement.requestPointerLock();
     }
   }
@@ -410,17 +1186,75 @@ async function boot() {
     if (!overlay.classList.contains("hidden") || !loaderEl.classList.contains("hidden")) {
       return;
     }
+    if (anyShipDialogOpen() || unlockVaporFx || debugTweenFx) return;
     if (player.locked) {
-      const opened = touchMode
-        ? tryOpenYearByAim(e.clientX, e.clientY)
-        : tryOpenYearByAim(null, null);
-      if (opened) return;
+      // PC: unlock / desk options only via crosshair aim (pointer lock).
+      // Free-cursor clicks just re-lock look — never spend datapoints by accident.
+      const aimOk = touchMode || document.pointerLockElement === renderer.domElement;
+      if (aimOk) {
+        const deskOpt = touchMode
+          ? pickDeskOption(e.clientX, e.clientY)
+          : pickDeskOption(null, null);
+        if (deskOpt) {
+          activateDeskOption(deskOpt);
+          return;
+        }
+        const debugMon = touchMode
+          ? pickDebugMonitor(e.clientX, e.clientY)
+          : pickDebugMonitor(null, null);
+        if (debugMon) {
+          tryDebugWallMonitor(debugMon);
+          return;
+        }
+        const unlockDoor = touchMode
+          ? pickUnlockDoor(e.clientX, e.clientY)
+          : pickUnlockDoor(null, null);
+        if (unlockDoor) {
+          tryUnlockSealedDoor(unlockDoor);
+          return;
+        }
+        const opened = touchMode
+          ? tryOpenYearByAim(e.clientX, e.clientY)
+          : tryOpenYearByAim(null, null);
+        if (opened) return;
+      }
     }
     if (!touchMode) {
       displayOpt?.classList.add("hidden");
       renderer.domElement.requestPointerLock();
     }
   });
+
+  // Desktop: aim glow on unlock / desk option planes (crosshair)
+  if (!touchMode) {
+    window.addEventListener("mousemove", (e) => {
+      if (!player.locked || yearTransit || anyShipDialogOpen()) return;
+      const lockedPtr = document.pointerLockElement === renderer.domElement;
+      const deskOpt = lockedPtr
+        ? pickDeskOption(null, null)
+        : pickDeskOption(e.clientX, e.clientY);
+      if (deskOpt) {
+        setUnlockHover(null);
+        setDebugMonitorHover(null);
+        setDeskHover(deskOpt);
+        return;
+      }
+      setDeskHover(null);
+      const debugMon = lockedPtr
+        ? pickDebugMonitor(null, null)
+        : pickDebugMonitor(e.clientX, e.clientY);
+      if (debugMon) {
+        setUnlockHover(null);
+        setDebugMonitorHover(debugMon);
+        return;
+      }
+      setDebugMonitorHover(null);
+      const door = lockedPtr
+        ? pickUnlockDoor(null, null)
+        : pickUnlockDoor(e.clientX, e.clientY);
+      setUnlockHover(door);
+    });
+  }
 
   // Mobile: tap year mesh (avoid steal from on-screen sticks / E button)
   if (touchMode) {
@@ -433,6 +1267,21 @@ async function boot() {
           const t = e.target;
           if (t && mobileRoot.contains(t)) return;
         }
+        const deskOpt = pickDeskOption(e.clientX, e.clientY);
+        if (deskOpt) {
+          activateDeskOption(deskOpt);
+          return;
+        }
+        const debugMon = pickDebugMonitor(e.clientX, e.clientY);
+        if (debugMon) {
+          tryDebugWallMonitor(debugMon);
+          return;
+        }
+        const unlockDoor = pickUnlockDoor(e.clientX, e.clientY);
+        if (unlockDoor) {
+          tryUnlockSealedDoor(unlockDoor);
+          return;
+        }
         tryOpenYearByAim(e.clientX, e.clientY);
       },
       { passive: true }
@@ -441,7 +1290,11 @@ async function boot() {
 
   document.addEventListener("pointerlockchange", () => {
     if (touchMode) return;
-    player.setLocked(document.pointerLockElement === renderer.domElement);
+    // Re-enable look when lock returns. Do NOT clear locked on unlock —
+    // freeing the cursor for desk bubbles must not kill WASD.
+    if (document.pointerLockElement === renderer.domElement) {
+      player.setLocked(true);
+    }
   });
 
   let labelTimer = 0;
@@ -450,15 +1303,23 @@ async function boot() {
 
   let eHeld = false;
   window.addEventListener("keydown", (e) => {
+    if (e.code === "Escape") {
+      if (document.getElementById("unlock-confirm")) {
+        closeUnlockConfirm();
+        return;
+      }
+      if (document.getElementById("debug-confirm")) {
+        closeDebugConfirm();
+        return;
+      }
+      if (document.getElementById("reset-confirm")) {
+        closeResetConfirm();
+        return;
+      }
+    }
     if (e.code === "KeyR" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
       e.preventDefault();
-      const ud = ship.mainScreen.userData;
-      ud.statusView?.reset?.();
-      ud.mode = "default";
-      ud.screenMesh.material = ud.statusMat || ud.defaultMat;
-      ud.deco.visible = false;
-      // Replay hook (dev): restart Scene 1
-      beginScene1();
+      showResetConfirm();
       return;
     }
     if (e.code !== "KeyE") return;
@@ -471,6 +1332,8 @@ async function boot() {
   });
 
   window.addEventListener("resize", () => {
+    // Avoid aspect snap mid year-exit (esp. when leaving fullscreen on phone).
+    if (yearTransit) return;
     camera.aspect = innerWidth / innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(innerWidth, innerHeight);
@@ -480,6 +1343,7 @@ async function boot() {
     const { anim } = ship;
     for (const s of anim.screens) {
       if (s === mainMesh && ship.mainScreen.userData.mode === "outside") continue;
+      if (s.userData?.wallMonitor) continue;
       if (s.material?.emissiveIntensity == null) continue;
       s.material.emissiveIntensity = 0.95 + Math.sin(t * 1.5) * 0.2;
     }
@@ -527,6 +1391,29 @@ async function boot() {
       c.scale.setScalar(1 + Math.sin(t * 3) * 0.06);
       c.material.emissiveIntensity = 1.2 + Math.sin(t * 4) * 0.35;
     }
+    for (const holo of anim.infoHubHolos || []) {
+      if (!holo.visible) continue;
+      holo.rotation.y = t * 0.9;
+      if (holo.material) {
+        holo.material.opacity = 0.48 + Math.sin(t * 2.2) * 0.14;
+      }
+    }
+    for (const d of ship.autoDoors || []) {
+      const h = d.unlockHolo;
+      if (!h?.visible || !h.material || d === hoveredUnlockDoor) continue;
+      if (unlockVaporFx?.door === d) continue;
+      if (unlockDenyFx?.door === d) continue;
+      const base = h.userData.baseOpacity ?? 0.22;
+      h.material.opacity = base + Math.sin(t * 2.6) * 0.03;
+    }
+    for (const wm of anim.wallMonitors || []) {
+      const h = wm.debugHolo;
+      if (!h?.visible || !h.material || wm === hoveredDebugMonitor) continue;
+      const base = h.userData.baseOpacity ?? 0.55;
+      // Soft pulse only — hard flicker made orange/blue look glitchy
+      h.material.opacity = base + Math.sin(t * 1.6) * 0.04;
+    }
+    // Wall monitor colors are set on state change only (not every frame)
     for (const l of anim.engineLights) {
       l.intensity = 1.8 + Math.sin(t * 4) * 0.5;
     }
@@ -645,10 +1532,80 @@ async function boot() {
       boxHum.update(dt, boxDist);
     }
     updateStallDoors(ship.interactables, dt);
+    updateUnlockVapor(dt);
+    updateUnlockDeny(dt);
+    updateDebugRepair(dt);
+    updateDeskOptionsVisibility();
+    {
+      const inHub = roomAtPlayer()?.label === "Hub";
+      const px = player.position.x;
+      const py = player.position.y + 1.2;
+      const pz = player.position.z;
+      const nearR2 = 5.5 * 5.5;
+      let hubHoloDist = 99;
+      for (const holo of ship.anim?.infoHubHolos || []) {
+        if (inHub) {
+          holo.visible = false;
+          continue;
+        }
+        holo.getWorldPosition(holoWorldPos);
+        const wx = holoWorldPos.x - px;
+        const wy = holoWorldPos.y - py;
+        const wz = holoWorldPos.z - pz;
+        const d2 = wx * wx + wz * wz;
+        holo.visible = d2 <= nearR2 * 2.2;
+        if (holo.visible) {
+          const d3 = Math.sqrt(d2 + wy * wy);
+          if (d3 < hubHoloDist) hubHoloDist = d3;
+        }
+      }
+      hubHoloHiss.update(dt, hubHoloDist);
+      for (const d of ship.autoDoors || []) {
+        const h = d.unlockHolo;
+        if (!h || !d.locked) continue;
+        if (unlockVaporFx?.door === d) continue;
+        const dx = px - d.trigger.x;
+        const dz = pz - d.trigger.z;
+        h.visible = dx * dx + dz * dz <= nearR2;
+      }
+      for (const wm of ship.anim?.wallMonitors || []) {
+        const h = wm.debugHolo;
+        if (!h) continue;
+        const canShow =
+          !wm.debugged &&
+          !wm.repairing &&
+          wm.room?.userData?.lightMode === "sos";
+        if (!canShow) {
+          h.visible = false;
+          continue;
+        }
+        h.getWorldPosition(holoWorldPos);
+        const dx = holoWorldPos.x - px;
+        const dz = holoWorldPos.z - pz;
+        h.visible = dx * dx + dz * dz <= nearR2;
+      }
+      // Door lintel glow labels (GARDEN / DINER / …) — hide when far
+      if (ship.root && (frame & 3) === 0) {
+        ship.root.traverse((o) => {
+          if (!o?.userData?.doorOverLabel) return;
+          o.getWorldPosition(holoWorldPos);
+          const dx = holoWorldPos.x - px;
+          const dz = holoWorldPos.z - pz;
+          o.visible = dx * dx + dz * dz <= nearR2 * 1.6;
+        });
+      }
+    }
     if (ship.anim.sosActive && (!mobileQuality || (frame & 1) === 0)) {
-      updateSosLights(ship.anim.sosRooms, t, ship.anim.hubNeon);
+      const hubStillSos = (ship.anim.sosRooms || []).some(
+        (r) =>
+          r?.userData?.label === "Hub" && r.userData.lightMode === "sos"
+      );
+      updateSosLights(ship.anim.sosRooms, t, ship.anim.hubNeon, hubStillSos);
     }
     updatePlants(ship.anim, t);
+    if (!mobileQuality || (frame & 1) === 0) {
+      updateSleepingCrew(ship.anim?.sleepingCrew, t, player.position);
+    }
     // deco only when near animated areas; throttle harder on mobile
     const px = player.position.x;
     const pz = player.position.z;
@@ -679,8 +1636,8 @@ async function boot() {
       const near = nearMainScreen();
       const status = ud.statusView;
 
-      // Walk up to the big screen → auto-start Scene 1 briefing (no click)
-      if (player.locked && near) tryStartBriefingByProximity();
+      // Safety net if Scene 1 briefing somehow never started
+      if (player.locked && status?.needsAlertStart?.()) tryStartBriefingByProximity();
 
       const unfinished =
         ud.mode === "default" && status?.hasUnfinishedDialogue?.();
@@ -694,7 +1651,7 @@ async function boot() {
         hudPrompt.clearDialogue("info-hub");
       }
 
-      // 2) Nearby interaction — only when dialogue does not own the box
+      // 2) Nearby interaction — stalls only (console/outside/reset = desk holos)
       let nearby = null;
       let nearbyTap = null;
       if (player.locked && !hudPrompt.hasDialogue) {
@@ -705,10 +1662,10 @@ async function boot() {
             lockedDoorLine =
               LOCKED_DOOR_LINES[(Math.random() * LOCKED_DOOR_LINES.length) | 0];
             playDoorDenied();
-            // Small gap after digital deny before VO (don't overlap)
             const line = lockedDoorLine;
             setTimeout(() => shipVoice.trySpeak(line), 320);
           }
+          // Show the same VO line in the HUD (unlock is still via red door hologram)
           nearby = lockedDoorLine;
         } else {
           lockedDoorKey = null;
@@ -717,16 +1674,6 @@ async function boot() {
           if (stall) {
             const p = stall.prompt();
             nearby = touchMode ? p.replace(/^Press E/, "Tap") : p;
-            nearbyTap = () => doInteract();
-          } else if (near) {
-            nearby =
-              ud.mode === "default"
-                ? touchMode
-                  ? "See outside"
-                  : "Press E · See outside"
-                : touchMode
-                  ? "Open console"
-                  : "Press E · See console";
             nearbyTap = () => doInteract();
           }
         }

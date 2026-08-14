@@ -94,7 +94,7 @@ export class HudPrompt {
       clickable = !!this._dialogue.clickable && !!text;
     } else if (this._nearby) {
       text = this._nearby;
-      clickable = this.touchMode && !!this._nearbyActivate;
+      clickable = !!this._nearbyActivate;
     }
 
     const key = `${dialogueOwns ? "d" : "n"}|${text || ""}|${clickable ? 1 : 0}`;

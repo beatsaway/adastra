@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { shipVoice } from "./ai-voice.js";
 import { playBriefStart } from "../sfx/brief.js";
+import { isDoorUnlocked as isDoorAlreadyUnlocked, markDoorUnlocked, DOOR_UNLOCK_COST, MONITOR_DEBUG_COST, isMonitorDebugged } from "./datapoints.js?v=adastra1000";
 
 const WALL = 0xf7f8fa;
 const FLOOR = 0xcfd5de;
@@ -1092,7 +1093,7 @@ function makeEntranceFrame(room, frameKeys, {
 }
 
 function makeGlassDoor(room, doorsOut, doorKeys, {
-  ox, oz, localX, localZ, gw, h, axis, colliders = null, locked = false,
+  ox, oz, localX, localZ, gw, h, axis, colliders = null, locked = false, side = "",
 }) {
   const wx = ox + localX;
   const wz = oz + localZ;
@@ -1110,15 +1111,26 @@ function makeGlassDoor(room, doorsOut, doorKeys, {
   const radius = Math.max(0.08, holeR - clearance * 0.5);
 
   const glassMat = new THREE.MeshPhysicalMaterial({
-    color: 0xc8e4f5,
-    metalness: 0.05,
-    roughness: 0.06,
-    transmission: 0.88,
-    thickness: 0.4,
+    color: 0x9eb8c8,
+    metalness: 0.08,
+    roughness: 0.22,
+    // Keep a hint of glass — not a see-through tunnel across the ship
+    transmission: 0.18,
+    thickness: 0.55,
     ior: 1.45,
     transparent: true,
-    opacity: 1,
+    opacity: 0.92,
     depthWrite: true,
+    side: THREE.DoubleSide,
+  });
+  glassMat.userData.doorGlass = true;
+  // Opaque seal while locked — clear glass was an x-ray into the room / unlock text
+  const sealedMat = new THREE.MeshStandardMaterial({
+    color: 0xa8b2bc,
+    metalness: 0.62,
+    roughness: 0.32,
+    emissive: 0x1a2228,
+    emissiveIntensity: 0.12,
     side: THREE.DoubleSide,
   });
 
@@ -1139,37 +1151,83 @@ function makeGlassDoor(room, doorsOut, doorKeys, {
   const slide = new THREE.Group();
   root.add(slide);
 
-  const panel = extrudeRounded(panelW, panelH, 0.04, radius, glassMat);
+  // Locked rooms: solid walk-blocker in the doorway (glass alone has no collision).
+  // Always build the collider + holo for lockable doors so a soft reset can re-seal them.
+  let blockCollider = null;
+  const effectivelyLocked = !!locked && !isDoorAlreadyUnlocked(key);
+
+  const panel = extrudeRounded(
+    panelW,
+    panelH,
+    0.04,
+    radius,
+    effectivelyLocked ? sealedMat : glassMat
+  );
   panel.position.y = holeY;
   panel.castShadow = false;
   panel.receiveShadow = false;
   slide.add(panel);
-
-  // Locked rooms: solid walk-blocker in the doorway (glass alone has no collision)
   if (locked && colliders) {
+    const before = colliders.length;
     if (axis === "x") {
       blockZone(colliders, panelW, panelH, wallT + 0.08, doorX, holeY, doorZ, ox, oz);
     } else {
       blockZone(colliders, wallT + 0.08, panelH, panelW, doorX, holeY, doorZ, ox, oz);
     }
+    if (colliders.length > before) {
+      blockCollider = colliders[colliders.length - 1];
+      if (!effectivelyLocked) colliders.pop();
+    }
+  }
+
+  let unlockHolo = null;
+  if (locked) {
+    unlockHolo = makeDoorUnlockHolo();
+    const homeY = holeY - 0.2;
+    // Face the OUTSIDE of the locked room (where the captain approaches).
+    // West/south doors need the flipped local side; east/north keep the default.
+    const flipOut = side === "w" || side === "s";
+    unlockHolo.position.set(0, homeY, flipOut ? -0.14 : 0.14);
+    unlockHolo.rotation.y = flipOut ? Math.PI : 0;
+    unlockHolo.userData.homeY = homeY;
+    unlockHolo.userData.doorKey = key;
+    unlockHolo.visible = effectivelyLocked;
+    slide.add(unlockHolo);
   }
 
   doorsOut.push({
     key,
     panel: slide,
+    doorMesh: panel,
+    glassMat,
+    sealedMat,
     hasPanel: true,
     closedX: 0,
     openDist: panelW + 0.12,
     trigger: new THREE.Vector3(wx, 0, wz),
     open: 0,
     target: 0,
-    locked: !!locked,
+    locked: effectivelyLocked,
+    lockable: !!locked,
+    blockCollider: effectivelyLocked ? blockCollider : null,
+    savedBlockCollider: blockCollider,
+    colliders,
+    unlockHolo,
   });
+}
+
+function syncDoorPanelSeal(door) {
+  if (!door?.doorMesh) return;
+  const sealed = !!door.locked;
+  const next = sealed ? door.sealedMat : door.glassMat;
+  if (next && door.doorMesh.material !== next) {
+    door.doorMesh.material = next;
+  }
 }
 
 function roomShell(colliders, group, {
   cx, cz, w, d, h = 3.2, door = null, doors = null, floorColor = FLOOR, label = "",
-  autoDoors = null, doorKeys = null, frameKeys = null,
+  autoDoors = null, doorKeys = null, frameKeys = null, anim = null,
 }) {
   const room = new THREE.Group();
   room.position.set(cx, 0, cz);
@@ -1258,6 +1316,7 @@ function roomShell(colliders, group, {
   const ceiling = box(w, 0.1, d, ceilMat, 0, h, 0);
   room.add(ceiling);
   room.userData.ceiling = ceiling;
+  room.userData.ceilBaseColor = ceilTint;
 
   // Ceiling ring light — wide flat rim on XZ (not a tall donut)
   const ringR = Math.min(w, d) * 0.28;
@@ -1317,10 +1376,20 @@ function roomShell(colliders, group, {
           frameMat: wallMat,
         });
       }
+      // Open holes into the Info Hub (no glass) — cyan hologram cue
+      if (
+        anim &&
+        /hub/i.test(String(g.leadsTo || "")) &&
+        /corridor/i.test(String(label || ""))
+      ) {
+        makeInfoHubDoorHolo(room, anim, {
+          ox, oz, localX: 0, localZ: z, gw, h, axis: "x",
+        });
+      }
       if (autoDoors && doorKeys && roomWantsDoor(label)) {
         makeGlassDoor(room, autoDoors, doorKeys, {
           ox, oz, localX: 0, localZ: z, gw, h, axis: "x",
-          colliders, locked: roomDoorLocked(label),
+          colliders, locked: roomDoorLocked(label), side,
         });
       }
     }
@@ -1346,10 +1415,19 @@ function roomShell(colliders, group, {
           frameMat: wallMat,
         });
       }
+      if (
+        anim &&
+        /hub/i.test(String(g.leadsTo || "")) &&
+        /corridor/i.test(String(label || ""))
+      ) {
+        makeInfoHubDoorHolo(room, anim, {
+          ox, oz, localX: x, localZ: 0, gw, h, axis: "z",
+        });
+      }
       if (autoDoors && doorKeys && roomWantsDoor(label)) {
         makeGlassDoor(room, autoDoors, doorKeys, {
           ox, oz, localX: x, localZ: 0, gw, h, axis: "z",
-          colliders, locked: roomDoorLocked(label),
+          colliders, locked: roomDoorLocked(label), side,
         });
       }
     }
@@ -1728,9 +1806,9 @@ function makeRectOutlineLight(room, color, marginScale = 0.12, bar = 0.28) {
 
 function tintCeilingFixtures(room, color, emissiveIntensity = 1.2) {
   const ring = room.userData.ceilingRing;
-  if (ring?.material && ring.visible) {
+  if (ring?.material) {
     ring.material.color.setHex(color);
-    ring.material.emissive.setHex(color);
+    if (ring.material.emissive) ring.material.emissive.setHex(color);
     ring.material.emissiveIntensity = emissiveIntensity;
   }
   if (room.userData.ceilingLight) room.userData.ceilingLight.color.setHex(color);
@@ -1747,6 +1825,7 @@ function styleRoomLighting(room, kind) {
   const fill = room.userData.fillLight;
   const ring = room.userData.ceilingRing;
   const span = Math.max(w, d);
+  room.userData.lightKind = kind;
 
   const setKey = (col, intensity) => {
     if (!key) return;
@@ -1887,7 +1966,7 @@ export function applySosLighting(room) {
  * Strong red / weak red emergency beat for SOS rooms.
  * ~1.1 Hz square-ish pulse (strong → weak → strong → weak).
  */
-export function updateSosLights(rooms, t, hubNeon = null) {
+export function updateSosLights(rooms, t, hubNeon = null, hubStillSos = false) {
   if (!rooms || !rooms.length) return;
   const phase = Math.sin(t * Math.PI * 2.15);
   const strong = phase >= 0;
@@ -1930,7 +2009,8 @@ export function updateSosLights(rooms, t, hubNeon = null) {
     }
   }
 
-  if (hubNeon) {
+  // Only pulse hub neon while Hub itself is still in SOS (not when other rooms are)
+  if (hubNeon && hubStillSos) {
     const c = hubNeon.color;
     c.setHex(SOS_RED);
     if (hubNeon.holo?.emissive) {
@@ -1953,6 +2033,335 @@ export function updateSosLights(rooms, t, hubNeon = null) {
 function enableSos(room, anim) {
   applySosLighting(room);
   if (anim?.sosRooms) anim.sosRooms.push(room);
+}
+
+/** Restore a room from SOS after all its wall monitors are debugged. */
+export function clearSosLighting(room, anim = null) {
+  if (!room?.userData) return;
+  room.userData.lightMode = "normal";
+  const kind = room.userData.lightKind;
+
+  const key = room.userData.ceilingLight;
+  const fill = room.userData.fillLight;
+  if (key?.userData) delete key.userData.sosBaseIntensity;
+  if (fill?.userData) delete fill.userData.sosBaseIntensity;
+
+  const ceil = room.userData.ceiling?.material;
+  if (ceil) {
+    const base = room.userData.ceilBaseColor ?? 0xe8eef5;
+    ceil.color.setHex(base);
+    if (ceil.emissive) ceil.emissive.setHex(0x000000);
+    ceil.emissiveIntensity = 0;
+    if (ceil.userData) delete ceil.userData.sosBaseEmissive;
+    ceil.needsUpdate = true;
+  }
+  const ring = room.userData.ceilingRing;
+  if (ring?.material?.userData) delete ring.material.userData.sosBaseEmissive;
+  if (room.userData.rectOutlineMat?.userData) {
+    delete room.userData.rectOutlineMat.userData.sosBaseEmissive;
+  }
+  const floor = room.userData.floor?.material;
+  if (floor?.userData) delete floor.userData.sosBaseEmissive;
+
+  if (kind) styleRoomLighting(room, kind);
+
+  // Cockpit: force cool lighting + kill any leftover SOS ceiling glow
+  if (kind === "control") {
+    if (ring) ring.visible = false;
+    if (key) {
+      key.color.setHex(0xb8d4ff);
+      key.intensity = 2.75;
+    }
+    if (fill) {
+      fill.color.setHex(0xd0e4ff);
+      fill.intensity = 0.75;
+      fill.visible = true;
+    }
+    if (ceil) {
+      ceil.color.setHex(room.userData.ceilBaseColor ?? 0xf4f6f8);
+      if (ceil.emissive) ceil.emissive.setHex(0x000000);
+      ceil.emissiveIntensity = 0;
+      ceil.needsUpdate = true;
+    }
+    if (room.userData.rectOutlineMat) {
+      const m = room.userData.rectOutlineMat;
+      m.color.setHex(0xa8ccff);
+      if (m.emissive) m.emissive.setHex(0xa8ccff);
+      m.emissiveIntensity = 1.15;
+    }
+  }
+
+  // Ensure ring/outline are not left on SOS red after restyle
+  if (kind === "hub") {
+    if (ring) ring.visible = false;
+    if (room.userData.rectOutline) room.userData.rectOutline.visible = false;
+  }
+
+  if (kind === "hub" && anim?.hubNeon) {
+    const hn = anim.hubNeon;
+    if (hn.floor) {
+      hn.floor.color.setHex(0x0e3d34);
+      if (hn.floor.emissive) hn.floor.emissive.setHex(0x0e3d34);
+      hn.floor.emissiveIntensity = 0.55;
+    }
+    if (hn.ceiling) {
+      hn.ceiling.color.setHex(0x44ffcc);
+      if (hn.ceiling.emissive) hn.ceiling.emissive.setHex(0x44ffcc);
+      hn.ceiling.emissiveIntensity = 0.95;
+    }
+    if (hn.holo?.emissive) {
+      hn.holo.emissive.setHex(0x44ffcc);
+      if (hn.holo.emissiveIntensity != null) hn.holo.emissiveIntensity = 0.85;
+    }
+    if (hn.light) {
+      hn.light.color.setHex(0x88ffdd);
+      hn.light.intensity = 3.2;
+    }
+    if (hn.ceilingLight) {
+      hn.ceilingLight.color.setHex(0xffffff);
+      hn.ceilingLight.intensity = 0.35;
+    }
+  }
+
+  // Hub is the spine: clearing it also restores corridors + crew deck (no monitors there)
+  if (kind === "hub" && anim?.hubLinkedSosRooms?.length) {
+    for (const linked of anim.hubLinkedSosRooms) {
+      if (linked && linked !== room && linked.userData?.lightMode === "sos") {
+        clearSosLighting(linked, null);
+      }
+    }
+  }
+
+  // Cockpit clear also restores the north corridor (its red light spills into the cockpit)
+  if (kind === "control" && anim?.cockpitLinkedSosRooms?.length) {
+    for (const linked of anim.cockpitLinkedSosRooms) {
+      if (linked && linked !== room && linked.userData?.lightMode === "sos") {
+        clearSosLighting(linked, null);
+      }
+    }
+  }
+
+  if (anim) syncShipSosActive(anim);
+}
+
+/** True while any SOS room is still in emergency lighting. */
+export function syncShipSosActive(anim) {
+  if (!anim) return false;
+  let any = false;
+  for (const room of anim.sosRooms || []) {
+    if (room?.userData?.lightMode === "sos") {
+      any = true;
+      break;
+    }
+  }
+  anim.sosActive = any;
+  return any;
+}
+
+/** Orange while room is SOS + undebugged; calm blue/cyan once debugged. */
+export function applyWallMonitorVisual(wm) {
+  if (!wm || wm.repairing) return;
+  const roomSos = wm.room?.userData?.lightMode === "sos";
+  const sos = roomSos && !wm.debugged;
+  setWallMonitorSosBlend(wm, sos ? 0 : 1);
+  syncDebugHoloVisibility(wm);
+}
+
+/** u=0 orange SOS · u=1 calm blue (used by repair bar tween). */
+export function setWallMonitorSosBlend(wm, u) {
+  if (!wm) return;
+  const t = Math.max(0, Math.min(1, u));
+  const lerpC = (a, b) => {
+    const ar = (a >> 16) & 255, ag = (a >> 8) & 255, ab = a & 255;
+    const br = (b >> 16) & 255, bg = (b >> 8) & 255, bb = b & 255;
+    const r = (ar + (br - ar) * t) | 0;
+    const g = (ag + (bg - ag) * t) | 0;
+    const bl = (ab + (bb - ab) * t) | 0;
+    return (r << 16) | (g << 8) | bl;
+  };
+  if (wm.screenMat?.emissive) {
+    wm.screenMat.emissive.setHex(lerpC(0xcc5510, 0x1a90cc));
+    wm.screenMat.color.setHex(lerpC(0x2a1208, 0x0a2030));
+    if (wm.screenMat.emissiveIntensity != null) {
+      wm.screenMat.emissiveIntensity = 0.85 + (1 - t) * 0.1;
+    }
+  }
+  for (const bm of wm.barMats || []) {
+    const c = lerpC(0xff7a33, 0x44ffcc);
+    if (bm.emissive) bm.emissive.setHex(c);
+    if (bm.color) bm.color.setHex(c);
+  }
+  for (let i = 0; i < (wm.ringMats || []).length; i++) {
+    const rm = wm.ringMats[i];
+    if (!rm?.color) continue;
+    const o = i % 2 ? 0xff9944 : 0xff6622;
+    const n = i % 2 ? 0x66ffcc : 0x44aaff;
+    rm.color.setHex(lerpC(o, n));
+  }
+  if (wm.underGlowMat?.emissive) {
+    const c = lerpC(0xff7a33, 0x3ec8ff);
+    wm.underGlowMat.emissive.setHex(c);
+    if (wm.underGlowMat.color) wm.underGlowMat.color.setHex(c);
+  }
+}
+
+function syncDebugHoloVisibility(wm) {
+  const h = wm?.debugHolo;
+  if (!h) return;
+  const show =
+    !wm.debugged &&
+    !wm.repairing &&
+    wm.room?.userData?.lightMode === "sos";
+  h.visible = !!show;
+  if (!show && h.material) {
+    if (h.userData.baseMap) h.material.map = h.userData.baseMap;
+    h.material.color.setRGB(1, 1, 1);
+    h.material.opacity = h.userData.baseOpacity ?? 0.55;
+  }
+}
+
+/** Clickable SOS text on wall monitors (same idea as door unlock holos). */
+function makeDebugMonitorHolo(maxW = 1.6, maxH = 0.85) {
+  const lines = ["Debug", "with " + MONITOR_DEBUG_COST + " data points"];
+  const orange = makeHoloLinesTexture(lines, {
+    fill: "#ff9944",
+    shadow: "rgba(200, 80, 20, 0.9)",
+    fontPx: 44,
+  });
+  const bright = makeHoloLinesTexture(lines, {
+    fill: "#ffe0a8",
+    shadow: "rgba(255, 160, 60, 0.95)",
+    fontPx: 44,
+  });
+  const aspect = Math.max(0.5, orange.aspect || 1.6);
+  // Compact label — lower third of the monitor, stay inside the face
+  let planeH = Math.min(maxH * 0.36, 0.4);
+  let planeW = planeH * aspect;
+  const maxPlaneW = Math.max(0.28, maxW * 0.58);
+  const maxPlaneH = Math.max(0.16, maxH * 0.34);
+  if (planeW > maxPlaneW) {
+    planeW = maxPlaneW;
+    planeH = planeW / aspect;
+  }
+  if (planeH > maxPlaneH) {
+    planeH = maxPlaneH;
+    planeW = planeH * aspect;
+  }
+  const mat = new THREE.MeshBasicMaterial({
+    map: orange.tex,
+    transparent: true,
+    opacity: 0.55,
+    side: THREE.DoubleSide,
+    depthTest: true,
+    depthWrite: false,
+    toneMapped: false,
+    // Slight bias vs screen face only — must still lose to real walls
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
+  });
+  const plane = new THREE.Mesh(
+    new THREE.PlaneGeometry(planeW, planeH),
+    mat
+  );
+  plane.renderOrder = 1;
+  plane.userData.debugHolo = true;
+  plane.userData.baseMap = orange.tex;
+  plane.userData.hoverMap = bright.tex;
+  plane.userData.baseOpacity = 0.55;
+  plane.userData.hoverOpacity = 0.98;
+  return plane;
+}
+
+function attachDebugHoloToMonitor(wm, opts = {}) {
+  if (!wm?.group) return null;
+  const maxW = opts.maxW ?? 1.6;
+  const maxH = opts.maxH ?? 0.9;
+  // Coplanar with screen face; sit in the lower part of the panel
+  const z = opts.z ?? 0.081;
+  const y = opts.y != null ? opts.y : -maxH * 0.3;
+  const holo = makeDebugMonitorHolo(maxW, maxH);
+  holo.position.set(opts.x ?? 0, y, z);
+  if (opts.rotY) holo.rotation.y = opts.rotY;
+  wm.group.add(holo);
+  wm.debugHolo = holo;
+  holo.userData.monitorId = wm.id;
+  syncDebugHoloVisibility(wm);
+  return holo;
+}
+
+export function refreshAllWallMonitors(anim) {
+  for (const wm of anim?.wallMonitors || []) applyWallMonitorVisual(wm);
+}
+
+/** Re-SOS every tracked room and undebug monitors (ship reset). */
+export function resetAllRoomSos(anim) {
+  if (!anim) return;
+  for (const room of anim.sosRooms || []) {
+    applySosLighting(room);
+  }
+  for (const wm of anim.wallMonitors || []) {
+    wm.debugged = false;
+    applyWallMonitorVisual(wm);
+  }
+  anim.sosActive = true;
+}
+
+function monitorIdForRoom(room) {
+  const label = String(room?.userData?.label || "room")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "") || "room";
+  const n = (room.userData._monitorSeq = (room.userData._monitorSeq || 0) + 1);
+  return label + "-" + (n - 1);
+}
+
+function registerWallMonitor(anim, room, group, mats, holoOpts = {}) {
+  if (!anim.wallMonitors) anim.wallMonitors = [];
+  const id = monitorIdForRoom(room);
+  const entry = {
+    id,
+    room,
+    group,
+    debugged: isMonitorDebugged(id),
+    repairing: false,
+    maxW: holoOpts.maxW ?? 1.6,
+    maxH: holoOpts.maxH ?? 0.9,
+    screenMat: mats.screenMat || null,
+    barMats: mats.barMats || [],
+    ringMats: mats.ringMats || [],
+    underGlowMat: mats.underGlowMat || null,
+    debugHolo: null,
+  };
+  anim.wallMonitors.push(entry);
+  attachDebugHoloToMonitor(entry, holoOpts);
+  applyWallMonitorVisual(entry);
+  return entry;
+}
+
+/** @deprecated Press E removed — debug is click/tap on the monitor text. */
+export function attachWallMonitorInteractables() {
+  /* no-op */
+}
+
+/**
+ * Mark monitor debugged; if room's last orange panel clears, exit SOS.
+ * Returns { roomCleared, roomName } when the room returns to normal.
+ */
+export function debugWallMonitor(wm, anim) {
+  if (!wm || wm.debugged) return { roomCleared: false, roomName: "" };
+  wm.debugged = true;
+  applyWallMonitorVisual(wm);
+  const room = wm.room;
+  const roomName = room?.userData?.label || "this room";
+  const siblings = (anim?.wallMonitors || []).filter((m) => m.room === room);
+  const allDone = siblings.length > 0 && siblings.every((m) => m.debugged);
+  if (allDone && room?.userData?.lightMode === "sos") {
+    clearSosLighting(room, anim);
+    refreshAllWallMonitors(anim);
+    return { roomCleared: true, roomName };
+  }
+  return { roomCleared: false, roomName };
 }
 
 function makeConsole(group, x, y, z, rotY = 0) {
@@ -2163,8 +2572,69 @@ function seatCrewAtChair(room, x, z, rotY = 0, scale = 0.44) {
   return av;
 }
 
-/** Idle fidgets while avatars are in sitting state — arms + head nod / look around. */
+/**
+ * Inactive sleeper in a bunk — parented to the bed so rotY follows the pod.
+ * No attention / patrol; barely breathes.
+ */
+function layCrewInBed(bed, scale = 0.38) {
+  const av = createCrewAvatar(scale);
+  const mattressTop = 0.56;
+  const halfThick = 0.26 * scale;
+  // Head toward pillow (local -Z); face up after +X pitch
+  av.position.set(0, mattressTop + halfThick, 0.08);
+  av.rotation.x = Math.PI / 2;
+  av.rotation.z = (Math.random() - 0.5) * 0.12;
+
+  const { head, leftArm, rightArm, leftLeg, rightLeg, faceScreen, body } = av.userData;
+  if (leftArm && rightArm) {
+    leftArm.rotation.set(0.12, 0, 0.35);
+    rightArm.rotation.set(0.08, 0, -0.32);
+    leftArm.position.y -= 0.02 * scale;
+    rightArm.position.y -= 0.02 * scale;
+  }
+  if (leftLeg && rightLeg) {
+    leftLeg.rotation.set(0.06, 0, 0.04);
+    rightLeg.rotation.set(-0.04, 0, -0.05);
+  }
+  if (head) {
+    head.rotation.set(0.2, (Math.random() - 0.5) * 0.25, (Math.random() - 0.5) * 0.15);
+  }
+  if (faceScreen?.material) {
+    faceScreen.material.emissiveIntensity = 0.12 + Math.random() * 0.08;
+  }
+  av.userData.state = "sleeping";
+  av.userData.sleep = {
+    phase: Math.random() * Math.PI * 2,
+    baseY: av.position.y,
+    body,
+  };
+  bed.add(av);
+  return av;
+}
+
+/** Soft idle breathe for sleeping bunk crew (very cheap). */
 const _avWorld = new THREE.Vector3();
+export function updateSleepingCrew(crew, t, playerPos = null, maxDist = 22) {
+  if (!crew?.length) return;
+  const maxD2 = maxDist * maxDist;
+  for (let i = 0; i < crew.length; i++) {
+    const av = crew[i];
+    if (av.userData.state !== "sleeping") continue;
+    const s = av.userData.sleep;
+    if (!s) continue;
+    if (playerPos) {
+      av.getWorldPosition(_avWorld);
+      if (_avWorld.distanceToSquared(playerPos) > maxD2) continue;
+    }
+    const breathe = Math.sin(t * 1.1 + s.phase) * 0.008;
+    av.position.y = s.baseY + breathe;
+    if (s.body) {
+      s.body.scale.y = 1 + breathe * 2.2;
+    }
+  }
+}
+
+/** Idle fidgets while avatars are in sitting state — arms + head nod / look around. */
 export function updateSittingCrew(crew, dt, t, playerPos = null, maxDist = 26) {
   if (!crew) return;
   const maxD2 = maxDist * maxDist;
@@ -3473,11 +3943,11 @@ function makeToilet(group, x, y, z, rotY = 0, opts = {}) {
       ctx.lineWidth = 2;
       ctx.strokeRect(s * 0.08, s * 0.1, s * 0.84, s * 0.8);
       ctx.fillStyle = "#66e0ff";
-      ctx.font = `bold ${Math.floor(s * 0.09)}px Orbitron, sans-serif`;
+      ctx.font = `bold ${Math.floor(s * 0.09)}px Sora, sans-serif`;
       ctx.textAlign = "center";
       ctx.fillText("AD ASTRA", s * 0.5, s * 0.28);
       ctx.fillStyle = "#9ad4ff";
-      ctx.font = `${Math.floor(s * 0.055)}px Share Tech Mono, monospace`;
+      ctx.font = `${Math.floor(s * 0.055)}px "IBM Plex Sans", sans-serif`;
       ctx.fillText("BIO WASTE · OK", s * 0.5, s * 0.42);
       ctx.fillText("PRESSURE 1.02", s * 0.5, s * 0.52);
       ctx.fillText("H2O CYCLE · NOM", s * 0.5, s * 0.62);
@@ -3859,6 +4329,7 @@ export function nearestInteractable(interactables, pos) {
   if (!interactables) return null;
   for (let i = 0; i < interactables.length; i++) {
     const it = interactables[i];
+    if (typeof it.active === "function" && !it.active()) continue;
     const dx = pos.x - it.position.x;
     const dz = pos.z - it.position.z;
     const dist = Math.hypot(dx, dz);
@@ -3881,7 +4352,7 @@ function decorateWallMonitors(room, anim, spots) {
 function makeGlowTextTexture(
   text = "Ad astra",
   fontPx = 128,
-  fontFamily = '"Orbitron", sans-serif',
+  fontFamily = '"Sora", "IBM Plex Sans", sans-serif',
   fontWeight = "700",
 ) {
   const resolved = `${fontWeight} ${fontPx}px ${fontFamily}`;
@@ -3919,9 +4390,288 @@ function makeGlowTextMaterial(tex) {
     transparent: true,
     opacity: 1,
     side: THREE.DoubleSide,
+    depthTest: true,
     depthWrite: false,
     toneMapped: false,
   });
+}
+
+/** Multiline hologram canvas (cyan / red unlock labels). */
+function makeHoloLinesTexture(lines, {
+  fill = "#7dfff6",
+  shadow = "rgba(64, 255, 235, 0.95)",
+  fontPx = 90,
+} = {}) {
+  const list = (Array.isArray(lines) ? lines : [String(lines || "")]).filter(
+    (s) => String(s).trim().length
+  );
+  if (!list.length) list.push(" ");
+  const fontFamily = '"Sora", "IBM Plex Sans", sans-serif';
+  const resolved = `700 ${fontPx}px ${fontFamily}`;
+  const probe = document.createElement("canvas").getContext("2d");
+  probe.font = resolved;
+  let tw = 8;
+  for (const line of list) {
+    tw = Math.max(tw, probe.measureText(line).width);
+  }
+  const lineH = fontPx * 1.12;
+  const padX = fontPx * 0.55;
+  const padY = fontPx * 0.45;
+  const c = document.createElement("canvas");
+  c.width = Math.ceil(tw + padX * 2);
+  c.height = Math.ceil(lineH * list.length + padY * 2);
+  const ctx = c.getContext("2d");
+  ctx.clearRect(0, 0, c.width, c.height);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.font = resolved;
+  ctx.fillStyle = fill;
+  ctx.shadowColor = shadow;
+  const cx = c.width * 0.5;
+  for (let i = 0; i < list.length; i++) {
+    const cy = padY + lineH * (i + 0.5);
+    ctx.shadowBlur = Math.max(22, fontPx * 0.4);
+    ctx.fillText(list[i], cx, cy);
+    ctx.shadowBlur = Math.max(10, fontPx * 0.18);
+    ctx.fillText(list[i], cx, cy);
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 0.88;
+    ctx.fillText(list[i], cx, cy);
+    ctx.globalAlpha = 1;
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  return { tex, aspect: c.width / Math.max(1, c.height) };
+}
+
+function makeInfoHubDoorHolo(room, anim, {
+  ox, oz, localX, localZ, gw, h, axis,
+}) {
+  if (!anim) return null;
+  if (!anim.infoHubHolos) anim.infoHubHolos = [];
+  const { holeY } = doorOpeningMetrics(gw, h);
+  const wx = ox + localX;
+  const wz = oz + localZ;
+  const key = `holo_${wx.toFixed(1)}_${wz.toFixed(1)}_${axis}`;
+  if (!anim.infoHubHoloKeys) anim.infoHubHoloKeys = new Set();
+  if (anim.infoHubHoloKeys.has(key)) return null;
+  anim.infoHubHoloKeys.add(key);
+
+  const { tex, aspect } = makeHoloLinesTexture(["INFO", "HUB"], {
+    fill: "#7dfff6",
+    shadow: "rgba(64, 255, 235, 0.95)",
+    fontPx: 110,
+  });
+  const planeH = 1.15;
+  const mat = new THREE.MeshBasicMaterial({
+    map: tex,
+    transparent: true,
+    opacity: 0.62,
+    side: THREE.DoubleSide,
+    depthTest: true,
+    depthWrite: false,
+    toneMapped: false,
+  });
+  const plane = new THREE.Mesh(
+    new THREE.PlaneGeometry(planeH * aspect, planeH),
+    mat
+  );
+  const inset = 0.35;
+  // Lower in the doorway so it reads near mid-opening, not head height
+  const holoY = Math.max(0.95, holeY - 0.55);
+  if (axis === "x") {
+    const inward = -Math.sign(localZ || 1);
+    plane.position.set(localX, holoY, localZ + inward * inset);
+  } else {
+    const inward = -Math.sign(localX || 1);
+    plane.position.set(localX + inward * inset, holoY, localZ);
+    plane.rotation.y = Math.PI / 2;
+  }
+  plane.renderOrder = 1;
+  room.add(plane);
+  anim.infoHubHolos.push(plane);
+  return plane;
+}
+
+/** Reddish unlock hologram on a sealed door (click / tap target). */
+function makeDoorUnlockHolo() {
+  const lines = ["Unlock with", DOOR_UNLOCK_COST + " data points"];
+  const red = makeHoloLinesTexture(lines, {
+    fill: "#e85a5a",
+    shadow: "rgba(180, 40, 40, 0.75)",
+    fontPx: 72,
+  });
+  const cyan = makeHoloLinesTexture(lines, {
+    fill: "#7dfff6",
+    shadow: "rgba(64, 255, 235, 0.95)",
+    fontPx: 72,
+  });
+  const planeH = 0.7;
+  const mat = new THREE.MeshBasicMaterial({
+    map: red.tex,
+    transparent: true,
+    opacity: 0.22,
+    side: THREE.DoubleSide,
+    depthTest: true,
+    depthWrite: false,
+    toneMapped: false,
+  });
+  const plane = new THREE.Mesh(
+    new THREE.PlaneGeometry(planeH * red.aspect, planeH),
+    mat
+  );
+  plane.renderOrder = 1;
+  plane.userData.unlockHolo = true;
+  plane.userData.baseMap = red.tex;
+  plane.userData.hoverMap = cyan.tex;
+  plane.userData.baseOpacity = 0.22;
+  plane.userData.hoverOpacity = 0.95;
+  plane.userData.flashOpacity = 1;
+  return plane;
+}
+
+/** Spend unlock: open a sealed door and drop its walk blocker. */
+export function unlockShipDoor(door, opts = {}) {
+  if (!door || !door.locked) return false;
+  door.locked = false;
+  syncDoorPanelSeal(door);
+  if (door.blockCollider && Array.isArray(door.colliders)) {
+    door.savedBlockCollider = door.blockCollider;
+    const i = door.colliders.indexOf(door.blockCollider);
+    if (i >= 0) door.colliders.splice(i, 1);
+    door.blockCollider = null;
+  }
+  if (door.unlockHolo && !opts.keepHoloVisible) {
+    door.unlockHolo.visible = false;
+  }
+  try {
+    markDoorUnlocked(door.key);
+  } catch (_) {}
+  return true;
+}
+
+/** Re-seal lockable doors after a ship progress reset (exercise datapoints untouched). */
+export function relockAllShipDoors(doors) {
+  for (const door of doors || []) {
+    if (!door?.lockable) continue;
+    door.locked = true;
+    syncDoorPanelSeal(door);
+    const block = door.savedBlockCollider || door.blockCollider;
+    if (block && Array.isArray(door.colliders) && !door.colliders.includes(block)) {
+      door.colliders.push(block);
+    }
+    door.blockCollider = block || null;
+    const holo = door.unlockHolo;
+    if (holo) {
+      holo.visible = true;
+      if (holo.userData.homeY != null) holo.position.y = holo.userData.homeY;
+      holo.scale.set(1, 1, 1);
+      if (holo.material) {
+        if (holo.userData.baseMap) holo.material.map = holo.userData.baseMap;
+        holo.material.opacity = holo.userData.baseOpacity ?? 0.22;
+        holo.material.needsUpdate = true;
+      }
+    }
+  }
+}
+
+/**
+ * Desk options as real Three.js planes (Roblox ClickDetector style).
+ * Aim with crosshair + click — works with pointer lock, ~3 cheap meshes.
+ */
+export function makeCockpitDeskOptions(parent) {
+  const group = new THREE.Group();
+  // Over middle desk blue panel — raised toward upper half of the screen
+  group.position.set(0, 1.22, 0.98);
+  parent.add(group);
+
+  // Top row: See outside | See console (smaller). Bottom: Reset.
+  const specs = [
+    {
+      id: "outside",
+      label: "See outside",
+      fill: "#7dfff6",
+      shadow: "rgba(64, 255, 235, 0.9)",
+      planeH: 0.2,
+      fontPx: 58,
+      x: -0.42,
+      y: 0.14,
+    },
+    {
+      id: "console",
+      label: "See console",
+      fill: "#9ec8ff",
+      shadow: "rgba(80, 160, 255, 0.9)",
+      planeH: 0.2,
+      fontPx: 58,
+      x: 0.42,
+      y: 0.14,
+    },
+    {
+      id: "reset",
+      label: "Reset",
+      fill: "#ffb070",
+      shadow: "rgba(255, 140, 70, 0.85)",
+      planeH: 0.24,
+      fontPx: 64,
+      x: 0,
+      y: -0.06,
+    },
+  ];
+  const items = [];
+
+  for (let i = 0; i < specs.length; i++) {
+    const spec = specs[i];
+    const { tex, aspect } = makeHoloLinesTexture([spec.label], {
+      fill: spec.fill,
+      shadow: spec.shadow,
+      fontPx: spec.fontPx,
+    });
+    const planeH = spec.planeH;
+    const mat = new THREE.MeshBasicMaterial({
+      map: tex,
+      transparent: true,
+      opacity: 0.4,
+      side: THREE.DoubleSide,
+      depthTest: true,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    const mesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(planeH * aspect, planeH),
+      mat
+    );
+    mesh.position.set(spec.x, spec.y, 0);
+    mesh.rotation.y = Math.PI;
+    mesh.rotation.x = 0.45;
+    mesh.renderOrder = 1;
+    mesh.userData.deskOption = true;
+    mesh.userData.optionId = spec.id;
+    mesh.userData.baseOpacity = 0.4;
+    mesh.userData.hoverOpacity = 0.95;
+    // Slightly larger invisible pick helper (same center) for easier FPS aim
+    const hit = new THREE.Mesh(
+      new THREE.PlaneGeometry(planeH * aspect * 1.25, planeH * 1.35),
+      new THREE.MeshBasicMaterial({
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      })
+    );
+    hit.position.copy(mesh.position);
+    hit.rotation.copy(mesh.rotation);
+    hit.userData.deskOption = true;
+    hit.userData.optionId = spec.id;
+    hit.userData.visual = mesh;
+    group.add(mesh);
+    group.add(hit);
+    items.push({ id: spec.id, mesh, hit });
+  }
+
+  group.visible = false;
+  return { group, items };
 }
 
 /** Wall / door glow label — height sets size; width follows texture aspect. */
@@ -3935,7 +4685,8 @@ function makeWallGlowText(room, {
   );
   plane.position.set(x, y, z);
   plane.rotation.y = rotY;
-  plane.renderOrder = 2;
+  plane.renderOrder = 1;
+  plane.userData.doorOverLabel = true;
   room.add(plane);
   return plane;
 }
@@ -4131,12 +4882,15 @@ function makeBigScreen(group, anim, x, y, z, w, h, rotY = 0, opts = {}) {
   const deco = new THREE.Group();
   g.add(deco);
 
+  const barMats = [];
   // fake UI bars (flat on screen, kept inside panel)
   for (let i = 0; i < 5; i++) {
     const bw = Math.min(w * (0.12 + (i % 3) * 0.06), w * 0.28);
-    const bar = box(bw, 0.05, 0.01, mat(0x44ffcc, {
+    const barMat = mat(0x44ffcc, {
       emissive: 0x44ffcc, emissiveIntensity: 0.85,
-    }), -w * 0.22 + (i % 3) * 0.22, h * 0.22 - Math.floor(i / 3) * 0.28, 0.09);
+    });
+    barMats.push(barMat);
+    const bar = box(bw, 0.05, 0.01, barMat, -w * 0.22 + (i % 3) * 0.22, h * 0.22 - Math.floor(i / 3) * 0.28, 0.09);
     anim.bars.push(bar);
     deco.add(bar);
   }
@@ -4151,17 +4905,20 @@ function makeBigScreen(group, anim, x, y, z, w, h, rotY = 0, opts = {}) {
     { r0: maxR * 0.75, r1: maxR * 0.82, start: 3.5, len: 1.5 },
     { r0: maxR * 0.2, r1: maxR * 0.28, start: 4.2, len: 2.6 },
   ];
+  const ringMats = [];
   for (let i = 0; i < segments.length; i++) {
     const s = segments[i];
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: i % 2 ? 0x66ffcc : 0x44aaff,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.7,
+      depthWrite: false,
+    });
+    ringMats.push(ringMat);
     const seg = new THREE.Mesh(
       new THREE.RingGeometry(s.r0, s.r1, 48, 1, s.start, s.len),
-      new THREE.MeshBasicMaterial({
-        color: i % 2 ? 0x66ffcc : 0x44aaff,
-        side: THREE.DoubleSide,
-        transparent: true,
-        opacity: 0.7,
-        depthWrite: false,
-      })
+      ringMat
     );
     seg.position.set(cx, cy, 0.09);
     const dir = i % 2 === 0 ? 1 : -1;
@@ -4170,7 +4927,8 @@ function makeBigScreen(group, anim, x, y, z, w, h, rotY = 0, opts = {}) {
     anim.screenRings.push(seg);
   }
 
-  g.add(box(w * 0.85, 0.05, 0.08, mat(GLOW_CYAN, { emissive: GLOW_CYAN, emissiveIntensity: 1.1 }), 0, -h / 2 - 0.1, 0.05));
+  const underGlowMat = mat(GLOW_CYAN, { emissive: GLOW_CYAN, emissiveIntensity: 1.1 });
+  g.add(box(w * 0.85, 0.05, 0.08, underGlowMat, 0, -h / 2 - 0.1, 0.05));
 
   if (opts.interactive) {
     g.userData.interactiveScreen = true;
@@ -4179,6 +4937,20 @@ function makeBigScreen(group, anim, x, y, z, w, h, rotY = 0, opts = {}) {
     g.userData.mode = "default";
     g.userData.width = w;
     g.userData.height = h;
+  } else {
+    // Wall monitors: orange in SOS until debugged → calm blue
+    // Tag so animateDeco doesn't pulse/recolor these (that looked glitchy)
+    screen.userData.wallMonitor = true;
+    deco.userData.wallMonitor = true;
+    deco.traverse((o) => {
+      o.userData.wallMonitor = true;
+    });
+    registerWallMonitor(anim, group, g, {
+      screenMat,
+      barMats,
+      ringMats,
+      underGlowMat,
+    }, { maxW: w, maxH: h, z: 0.081 });
   }
 
   return g;
@@ -4310,27 +5082,31 @@ export function createSpaceView(renderer, aspect = 16 / 9) {
 
 const STATUS_BRIEF_KEY = "luac-ship-ai-brief";
 
-/** Page 2 auto-advances after a short hold; briefing starts when near the screen. */
+export function clearShipBriefingProgress() {
+  try {
+    localStorage.removeItem(STATUS_BRIEF_KEY);
+  } catch (_) {}
+}
+
+/** Short Netflix-style briefing; Scene 1 starts on enter. */
 const STATUS_PAGES = [
   [
     "SHIP AI · PRIORITY CHANNEL",
     "",
     "Captain.",
     "",
-    "A solar storm hit this sector minutes ago.",
-    "The ship held.",
-    "But my core database did not.",
+    "A solar storm hit.",
+    "The ship held. My database did not.",
     "",
-    "I am still online — but most of me is missing.",
+    "I'm still online — most of me is gone.",
   ],
   [
-    "Rebuild my database please.",
+    "Collect data points.",
     "",
     "Go to the Info Hub.",
-    "Finish the exercises in each unit's lessons —",
-    "every one you complete helps repair my archive.",
+    "Finish the lesson tasks there.",
     "",
-    "Bring me back to full operation.",
+    "Every point helps rebuild me.",
   ],
 ];
 
@@ -4347,7 +5123,9 @@ function speakBriefLine(text) {
 /** Canvas “See stats” screen — first visit types an AI emergency briefing. */
 export function createStatusView(aspect = 16 / 9) {
   const W = 1280;
-  const H = Math.max(512, Math.round(W / aspect));
+  // Tall enough for both briefing pages + datapoint footer (wide cockpit aspect
+  // used to clamp H≈512 and clip later VO lines like “I am still online…”).
+  const H = Math.max(780, Math.round(W / Math.max(0.5, aspect)));
   const canvas = document.createElement("canvas");
   canvas.width = W;
   canvas.height = H;
@@ -4380,6 +5158,8 @@ export function createStatusView(aspect = 16 / 9) {
   let alertAnim = 0;
   /** Loading ellipsis phase: 0 → "." … 3 → ". . ." then loops */
   let alertDotPhase = 0;
+  let dpUsed = 0;
+  let dpAvailable = 0;
 
   function pageLines() {
     return STATUS_PAGES[pageIdx] || [];
@@ -4439,10 +5219,6 @@ export function createStatusView(aspect = 16 / 9) {
     ctx.lineWidth = 3;
     ctx.strokeRect(28, 28, W - 56, H - 56);
 
-    ctx.fillStyle = "rgba(255, 60, 60, 0.9)";
-    ctx.font = "700 18px ui-monospace, Consolas, monospace";
-    ctx.fillText("EMERGENCY · DATABASE OFFLINE", padX, padY);
-
     if (STATUS_PAGES.length > 1 && briefingStarted) {
       ctx.fillStyle = "rgba(255, 140, 140, 0.65)";
       ctx.font = "600 16px ui-monospace, Consolas, monospace";
@@ -4456,13 +5232,13 @@ export function createStatusView(aspect = 16 / 9) {
     const padX = 64;
     const padY = 52;
     const maxW = W - padX * 2;
-    const bodyFont = "500 28px ui-monospace, Consolas, monospace";
-    const headFont = "700 32px ui-monospace, Consolas, monospace";
+    const bodyFont = "500 26px ui-monospace, Consolas, monospace";
+    const headFont = "700 30px ui-monospace, Consolas, monospace";
 
     drawChrome(padX, padY);
 
-    let y = padY + 48;
-    const lineH = 40;
+    let y = padY + 44;
+    const lineH = 34;
 
     if (awaitingAlert()) {
       ctx.font = headFont;
@@ -4507,10 +5283,25 @@ export function createStatusView(aspect = 16 / 9) {
       if (row.caret && cursorOn) {
         const tw = ctx.measureText(row.text).width;
         ctx.fillStyle = "#ff4444";
-        ctx.fillRect(padX + tw + 4, y - 22, 14, 28);
+        ctx.fillRect(padX + tw + 4, y - 20, 12, 24);
       }
       y += lineH;
-      if (y > H - 48) break;
+      if (y > H - 100) break;
+    }
+
+    if (complete) {
+      y = Math.max(y + 24, H - 110);
+      ctx.fillStyle = "rgba(90, 255, 230, 0.85)";
+      ctx.font = "700 22px ui-monospace, Consolas, monospace";
+      ctx.fillText("DATA POINTS", padX, y);
+      y += 36;
+      ctx.fillStyle = "#9ef7ef";
+      ctx.font = "600 26px ui-monospace, Consolas, monospace";
+      ctx.fillText(
+        dpUsed + " data points used  /  " + dpAvailable + " data points available",
+        padX,
+        y
+      );
     }
 
     tex.needsUpdate = true;
@@ -4624,6 +5415,11 @@ export function createStatusView(aspect = 16 / 9) {
       alertAnim = 0;
       alertDotPhase = 0;
       drawFrame();
+    },
+    setDatapointStats(used, available) {
+      dpUsed = Math.max(0, Math.floor(Number(used) || 0));
+      dpAvailable = Math.max(0, Math.floor(Number(available) || 0));
+      if (complete) drawFrame();
     },
     update(dt) {
       blink += dt;
@@ -4806,14 +5602,14 @@ function createInfoHubArchive(hub, anim) {
   yearTitle.visible = false;
   root.add(yearTitle);
 
-  const labelBaseColor = new THREE.Color(0x243858);
+  const labelBaseColor = new THREE.Color(0xffc857);
   const nodes = YEARS.map((year, i) => {
     const g = new THREE.Group();
     const mesh = new THREE.Mesh(
       new THREE.IcosahedronGeometry(0.2, 0),
-      mat(0x040810, {
-        emissive: 0x02050c,
-        emissiveIntensity: 0.55,
+      mat(0xf0a428, {
+        emissive: 0xc87818,
+        emissiveIntensity: 0.7,
         roughness: 0.32,
         metalness: 0.18,
       })
@@ -4834,8 +5630,9 @@ function createInfoHubArchive(hub, anim) {
       mesh,
       label,
       angle,
-      baseColor: new THREE.Color(0x040810),
-      baseEmissive: new THREE.Color(0x02050c),
+      href: `../y${year}/`,
+      baseColor: new THREE.Color(0xf0a428),
+      baseEmissive: new THREE.Color(0xc87818),
       labelBase: labelBaseColor.clone(),
       lift: 0,
     };
@@ -4892,7 +5689,7 @@ function createInfoHubArchive(hub, anim) {
     getPickedYear() {
       return picked;
     },
-    /** Lock a year orb for the exit transition (purple + spin-up). */
+    /** Lock a year orb for the exit transition (spin-up). */
     beginYearPick(node) {
       if (!node || picked) return false;
       picked = node;
@@ -4900,6 +5697,13 @@ function createInfoHubArchive(hub, anim) {
       aimed = node;
       applyAimStyle(node, true);
       return true;
+    },
+    /** Undo pick (e.g. browser back restores the ship from bfcache). */
+    clearYearPick() {
+      if (picked) applyAimStyle(picked, false);
+      picked = null;
+      if (aimed) applyAimStyle(aimed, false);
+      aimed = null;
     },
     /** Roblox-style look highlight (camera forward / crosshair). */
     setAimedYear(node) {
@@ -5003,12 +5807,12 @@ export function buildShip(scene) {
 
   const colliders = [];
   const zones = [];
-  const anim = { screens: [], bars: [], rings: [], screenRings: [], cores: [], engineLights: [], blinkers: [], hubNeon: null, sittingCrew: [], patrolCrew: [], enginePipes: [], deliciousNeon: null, plants: [], activePlant: null, sosRooms: [], sosActive: true };
+  const anim = { screens: [], bars: [], rings: [], screenRings: [], cores: [], engineLights: [], blinkers: [], hubNeon: null, sittingCrew: [], patrolCrew: [], sleepingCrew: [], enginePipes: [], deliciousNeon: null, plants: [], activePlant: null, sosRooms: [], sosActive: true, wallMonitors: [], infoHubHolos: [] };
   const autoDoors = [];
   const interactables = [];
   const doorKeys = new Set();
   const frameKeys = new Set();
-  const mk = (opts) => roomShell(colliders, root, { autoDoors, doorKeys, frameKeys, ...opts });
+  const mk = (opts) => roomShell(colliders, root, { autoDoors, doorKeys, frameKeys, anim, ...opts });
 
   const H = 5.0;
   const DW = 2.8;
@@ -5048,6 +5852,7 @@ export function buildShip(scene) {
   makeConsole(bridge, 0, 0, 1.4, 0);
   makeConsole(bridge, -4.5, 0, 2.0, 0.35);
   makeConsole(bridge, 4.5, 0, 2.0, -0.35);
+  const deskOptions = makeCockpitDeskOptions(bridge);
 
   // seat behind a desk in desk-local space (localX along width, localZ toward chairs)
   const deskSeat = (deskX, deskZ, rotY, localX, localZ = -1.15) => {
@@ -5167,6 +5972,10 @@ export function buildShip(scene) {
   };
   makeDoorOverLabel(hub, "w", "G A R D E N");
   makeDoorOverLabel(hub, "e", "D I N E R");
+  // SOS orange wall panel (west wall, south of garden door)
+  decorateWallMonitors(hub, anim, [
+    [-5.25, 2.2, -3.35, Math.PI / 2, 2.2, 1.35],
+  ]);
   styleRoomLighting(hub, "hub");
   enableSos(hub, anim);
   // NPC patrols disabled for now (unlock later)
@@ -5304,8 +6113,11 @@ export function buildShip(scene) {
   ];
   bedXs.forEach((bx, i) => {
     // bunks closer to the N/S walls
-    makeBed(crew, bx, 0, 4.15, Math.PI, bedTones[i], interactables, crew.position.x, crew.position.z);
-    makeBed(crew, bx, 0, -4.15, 0, bedTones[i + 6], interactables, crew.position.x, crew.position.z);
+    const bedN = makeBed(crew, bx, 0, 4.15, Math.PI, bedTones[i], interactables, crew.position.x, crew.position.z);
+    const bedS = makeBed(crew, bx, 0, -4.15, 0, bedTones[i + 6], interactables, crew.position.x, crew.position.z);
+    // Most pods occupied — leave a couple empty so it doesn't look staged
+    if (i !== 2 && i !== 5) anim.sleepingCrew.push(layCrewInBed(bedN));
+    if (i !== 1 && i !== 4) anim.sleepingCrew.push(layCrewInBed(bedS));
   });
   // bluish fake-data wall monitor on the far (west) end
   decorateWallMonitors(crew, anim, [
@@ -5352,12 +6164,30 @@ export function buildShip(scene) {
   const sinkX = -4.05;
   const sinkZ = -3.72;
   makeWashSink(toilets, sinkX, 0, sinkZ, Math.PI / 2, { width: sinkW, taps: 4 });
-  const mirrorGlass = mat(0x88aacc, {
-    metalness: 0.85, roughness: 0.1, emissive: 0x223344, emissiveIntensity: 0.16,
+  // Long sink mirror doubles as the washroom SOS wall monitor (orange in alert)
+  const mirrorGlass = mat(0x0a2030, {
+    metalness: 0.45,
+    roughness: 0.22,
+    emissive: 0x1a90cc,
+    emissiveIntensity: 0.85,
   });
-  const mirrorFrame = mat(0xb8c0c8, { metalness: 0.65, roughness: 0.28 });
+  const mirrorFrame = mat(0xb8c0c8, {
+    metalness: 0.65,
+    roughness: 0.28,
+    emissive: 0x3ec8ff,
+    emissiveIntensity: 0.28,
+  });
   toilets.add(box(sinkW * 0.92, 1.05, 0.04, mirrorFrame, sinkX, 1.95, -4.28));
   toilets.add(box(sinkW * 0.86, 0.95, 0.03, mirrorGlass, sinkX, 1.95, -4.25));
+  const mirrorAnchor = new THREE.Object3D();
+  mirrorAnchor.position.set(sinkX, 1.95, -4.25);
+  toilets.add(mirrorAnchor);
+  registerWallMonitor(anim, toilets, mirrorAnchor, {
+    screenMat: mirrorGlass,
+    barMats: [],
+    ringMats: [],
+    underGlowMat: mirrorFrame,
+  }, { maxW: sinkW * 0.82, maxH: 0.88, z: 0.006 });
   styleRoomLighting(toilets, "hygiene");
   enableSos(toilets, anim);
 
@@ -5375,6 +6205,11 @@ export function buildShip(scene) {
   makeDoorOverLabel(corrE, "s", "E N G I N E");
   styleRoomLighting(corrE, "engAccess");
   enableSos(corrE, anim);
+
+  // Hub clears these satellite SOS zones when its own monitor is debugged
+  anim.hubLinkedSosRooms = [corrN, corrS, cross, corrE];
+  // Cockpit clear also turns off the north corridor (prevents red spill into cockpit)
+  anim.cockpitLinkedSosRooms = [corrN];
 
   // —— ENGINE ROOM ——
   const engineH = H + 0.6;
@@ -5405,6 +6240,10 @@ export function buildShip(scene) {
   makeChair(engine, -6.2, 0, -0.5, Math.PI / 2, 0x8a9088);
   makeConsole(engine, 5.2, 0, -0.5, -Math.PI / 2);
   makeChair(engine, 6.2, 0, -0.5, -Math.PI / 2, 0x8a9088);
+  // SOS orange wall monitor on west wall (north of side console)
+  decorateWallMonitors(engine, anim, [
+    [-7.75, 2.45, 3.15, Math.PI / 2, 3.1, 1.75],
+  ]);
   styleRoomLighting(engine, "engine");
   enableSos(engine, anim);
   // keep HUD / door labels as Engine Room
@@ -5419,7 +6258,25 @@ export function buildShip(scene) {
 
   mainScreen.userData.defaultMat = mainScreen.userData.screenMesh.material;
 
+  // Apply persisted monitor debug + clear SOS rooms already fully restored
+  {
+    const roomsDone = new Set();
+    for (const wm of anim.wallMonitors || []) {
+      if (!wm.debugged || !wm.room) continue;
+      const siblings = anim.wallMonitors.filter((m) => m.room === wm.room);
+      if (siblings.every((m) => m.debugged)) roomsDone.add(wm.room);
+    }
+    for (const room of roomsDone) {
+      clearSosLighting(room, anim);
+    }
+    refreshAllWallMonitors(anim);
+    syncShipSosActive(anim);
+    attachWallMonitorInteractables(anim, interactables, root);
+  }
+
   const interactPos = new THREE.Vector3(0, 2.35, 22 + 4.55);
+  // Middle desk world XZ (bridge local z=1.4 on cockpit at cz=22)
+  const deskPos = new THREE.Vector3(0, 1.2, 22 + 1.4);
   // Right-front corner of cockpit (not door-center), facing the big screen
   const spawn = new THREE.Vector3(5.6, 1.6, 19.2);
   const spawnYaw = Math.atan2(-(interactPos.x - spawn.x), -(interactPos.z - spawn.z));
@@ -5441,6 +6298,8 @@ export function buildShip(scene) {
     spawnYaw,
     mainScreen,
     interactPos,
+    deskPos,
+    deskOptions,
     hubBeacon: hubArchive,
     powerBoxes,
   };
@@ -5471,14 +6330,17 @@ export function downgradeMaterialsForMobile(root) {
         const trans = (m.transmission || 0) > 0.05 || (m.transparent && (m.opacity ?? 1) < 0.92);
         let nm;
         if (trans) {
+          const doorGlass = !!m.userData?.doorGlass;
           nm = new THREE.MeshBasicMaterial({
             color: m.color ? m.color.clone() : 0xffffff,
             map: m.map || null,
             transparent: true,
-            opacity: Math.min(0.5, m.opacity ?? 0.45),
+            opacity: doorGlass ? 0.88 : Math.min(0.5, m.opacity ?? 0.45),
             side: m.side ?? THREE.FrontSide,
-            depthWrite: false,
+            // Door glass must still occlude rooms behind it (no ship x-ray)
+            depthWrite: doorGlass ? true : false,
           });
+          if (doorGlass) nm.userData.doorGlass = true;
         } else {
           const em = m.emissive ? m.emissive.clone() : new THREE.Color(0x000000);
           const emSum = em.r + em.g + em.b;
@@ -5539,27 +6401,86 @@ export function updateAutoDoors(autoDoors, playerPos, dt, forceClosed = false, o
 
 /** AI lines when the captain tries a sealed door (database still corrupt). */
 export const LOCKED_DOOR_LINES = [
-  "Door command error. I want to open it. I can't.",
-  "Door command error. Hold on, Captain. I'm still putting myself back together.",
-  "Door command error. Door open protocol missing from my core.",
-  "Door command error. Access routine not found. That file is gone.",
-  "Door command error. Lock responds. Unlock sequence does not.",
-  "Door command error. I have no clearance record for this hatch.",
-  "Door command error. Room link offline. Cannot complete open request.",
-  "Door command error. Captain, that sector is still marked corrupt.",
-  "Door command error. Hatch sealed. Authorization table is empty.",
-  "Door command error. Open command received. Execution path failed.",
-  "Door command error. I lost the key data for this door in the storm.",
-  "Door command error. Sensor sees the latch. Memory does not.",
-  "Door command error. Entry denied — database fragment incomplete.",
-  "Door command error. That door is waiting on a restore I can't finish yet.",
-  "Door command error. No valid unlock token in local storage.",
-  "Door command error. Routing to this room returns null.",
-  "Door command error. Mechanical lock is fine. Soft lock is broken.",
-  "Door command error. I can ping the door. I cannot authorize it.",
-  "Door command error. Archive gap detected. Access suspended.",
-  "Door command error. Stand by. Door systems need that missing sector first.",
+  "Door command error. I can't open it.",
+  "Door command error. Still rebuilding.",
+  "Door command error. Open protocol missing.",
+  "Door command error. Access file gone.",
+  "Door command error. Unlock sequence failed.",
+  "Door command error. No clearance record.",
+  "Door command error. Room link offline.",
+  "Door command error. Sector still corrupt.",
+  "Door command error. Hatch sealed.",
+  "Door command error. Execution path failed.",
+  "Door command error. Key data lost.",
+  "Door command error. Memory gap on latch.",
+  "Door command error. Entry denied.",
+  "Door command error. Waiting on restore.",
+  "Door command error. No unlock token.",
+  "Door command error. Route returns null.",
+  "Door command error. Soft lock broken.",
+  "Door command error. Cannot authorize.",
+  "Door command error. Archive gap.",
+  "Door command error. Door systems pending.",
 ];
+
+/** Spoken when unlock is attempted without enough available data points. */
+export const INSUFFICIENT_DATAPOINT_LINES = [
+  "Insufficient data points. Restore more first.",
+  "Insufficient data points. Wallet's short.",
+  "Insufficient data points. Need a thicker packet.",
+  "Insufficient data points. Earn a few more.",
+  "Insufficient data points. Cost exceeds balance.",
+  "Insufficient data points. Archive too thin.",
+  "Insufficient data points. Balance too low.",
+  "Insufficient data points. Ledger says no.",
+  "Insufficient data points. Top up first.",
+  "Insufficient data points. Come back richer.",
+  "Insufficient data points. Counter's still low.",
+  "Insufficient data points. Cannot fund open.",
+  "Insufficient data points. Token unpaid.",
+  "Insufficient data points. Recover more first.",
+  "Insufficient data points. Balance too low.",
+  "Insufficient data points. Purse too light.",
+  "Insufficient data points. Count still short.",
+  "Insufficient data points. Payment failed.",
+  "Insufficient data points. Hands tied.",
+  "Insufficient data points. Fee unpaid.",
+  "Insufficient data points. Almost — not yet.",
+  "Insufficient data points. Credit gap.",
+  "Insufficient data points. Gather more first.",
+  "Insufficient data points. Clearance unpaid.",
+];
+
+/** Spoken when a room's last orange wall monitor is debugged (insert room name). */
+export const ROOM_RESTORED_LINES = [
+  "{room} is back to normal. Nice work, Captain.",
+  "Systems stable — {room} lighting restored.",
+  "Debug complete. {room} is functional again.",
+  "I can breathe easier. {room} is offline SOS.",
+  "Good patch. {room} returns to standard ops.",
+  "Archive sync succeeded. {room} looks healthy.",
+  "Alert cleared in {room}. Thank you, Captain.",
+  "That did it. {room} is calm and blue again.",
+  "Emergency mode released. {room} is back online.",
+  "Clean work. {room} no longer needs SOS lighting.",
+  "I feel that sector again — {room} is restored.",
+  "Wall panels greenlit. {room} is under control.",
+  "Fault tree closed. {room} reads normal.",
+  "You fixed it. {room} is ready for crew again.",
+  "SOS cancelled for {room}. Standing by.",
+  "Diagnostics pass. {room} is back in service.",
+  "Red alert lifted in {room}. Well done.",
+  "Monitor chain healthy. {room} is stable.",
+  "Power and light nominal in {room}.",
+  "Captain, {room} is functional — archive fragment held.",
+];
+
+export function pickRoomRestoredLine(roomName) {
+  const name = String(roomName || "this room").trim() || "this room";
+  const list = ROOM_RESTORED_LINES;
+  const raw = list[(Math.random() * list.length) | 0] || "{room} is back to normal.";
+  return raw.replace(/\{room\}/g, name);
+}
 
 /** Closest locked auto-door within trigger range, or null. */
 export function nearestLockedDoor(autoDoors, playerPos, radius = 2.6) {
