@@ -1335,14 +1335,14 @@ function roomShell(colliders, group, {
   room.add(ringLight);
   room.userData.ceilingRing = ringLight;
 
-  const light = new THREE.PointLight(0xf2f4f7, 2.2, Math.max(w, d) * 2.4, 1.0);
+  const light = new THREE.PointLight(0xf2f4f7, 2.2, Math.max(w, d) * 1.05, 2);
   light.position.set(0, h - 0.4, 0);
   light.castShadow = false;
   room.add(light);
   room.userData.ceilingLight = light;
 
   // Fill light so corners aren't murky
-  const fill = new THREE.PointLight(0xf0f4ff, 1.0, Math.max(w, d) * 2.0, 1.1);
+  const fill = new THREE.PointLight(0xf0f4ff, 1.0, Math.max(w, d) * 0.95, 2);
   fill.position.set(0, h * 0.55, 0);
   fill.castShadow = false;
   room.add(fill);
@@ -1831,14 +1831,17 @@ function styleRoomLighting(room, kind) {
     if (!key) return;
     key.color.setHex(col);
     key.intensity = intensity;
-    key.distance = span * 2.6;
+    // Keep lights mostly inside this room (old span*2.6 let cockpit SOS paint the ship)
+    key.distance = Math.min(span * 1.05, Math.hypot(w, d) * 0.62 + 2.5);
+    key.decay = 2;
     key.position.set(0, h - 0.35, 0);
   };
   const setFill = (col, intensity) => {
     if (!fill) return;
     fill.color.setHex(col);
     fill.intensity = intensity;
-    fill.distance = span * 2.0;
+    fill.distance = Math.min(span * 0.95, Math.hypot(w, d) * 0.55 + 2);
+    fill.decay = 2;
     fill.visible = intensity > 0.01;
   };
   const hideRing = () => { if (ring) ring.visible = false; };
@@ -1865,6 +1868,9 @@ function styleRoomLighting(room, kind) {
     makeRectOutlineLight(room, 0xa8ccff, 0.1, 0.32);
     setKey(0xb8d4ff, 2.6);
     setFill(0xd0e4ff, 0.65);
+    // Extra-tight range so red SOS in the bridge cannot wash the corridor/hub
+    if (key) key.distance = Math.min(key.distance, 11.5);
+    if (fill) fill.distance = Math.min(fill.distance, 9.5);
     return;
   }
 
@@ -1921,12 +1927,34 @@ export function applySosLighting(room) {
     key.color.setHex(SOS_RED);
     key.intensity = keyBase;
     key.userData.sosBaseIntensity = keyBase;
+    const dims = room.userData.dims;
+    if (dims) {
+      const span = Math.max(dims.w, dims.d);
+      key.distance = Math.min(span * 1.0, Math.hypot(dims.w, dims.d) * 0.58 + 2);
+      key.decay = 2;
+    }
   }
   if (fill) {
     fill.color.setHex(SOS_RED_FILL);
     fill.intensity = fillBase;
     fill.visible = true;
     fill.userData.sosBaseIntensity = fillBase;
+    const dims = room.userData.dims;
+    if (dims) {
+      const span = Math.max(dims.w, dims.d);
+      fill.distance = Math.min(span * 0.9, Math.hypot(dims.w, dims.d) * 0.5 + 1.8);
+      fill.decay = 2;
+    }
+  }
+  // Cockpit Ad Astra ceiling brand — tint with SOS (emissive text, not a light)
+  const brand = room.userData.ceilingBrand;
+  if (brand?.material?.color) {
+    if (!brand.userData.baseColor) {
+      brand.userData.baseColor = brand.material.color.clone();
+    }
+    brand.material.color.setHex(0xff6a6a);
+    brand.material.opacity = Math.min(1, (brand.material.opacity || 1) * 1.05);
+    brand.material.needsUpdate = true;
   }
   if (ring?.material) {
     ring.material.color.setHex(SOS_RED);
@@ -2071,11 +2099,21 @@ export function clearSosLighting(room, anim = null) {
     if (key) {
       key.color.setHex(0xb8d4ff);
       key.intensity = 2.75;
+      key.distance = Math.min(
+        Math.max(room.userData.dims?.w || 16, room.userData.dims?.d || 10) * 1.0,
+        Math.hypot(room.userData.dims?.w || 16, room.userData.dims?.d || 10) * 0.58 + 2
+      );
+      key.decay = 2;
     }
     if (fill) {
       fill.color.setHex(0xd0e4ff);
       fill.intensity = 0.75;
       fill.visible = true;
+      fill.distance = Math.min(
+        Math.max(room.userData.dims?.w || 16, room.userData.dims?.d || 10) * 0.9,
+        Math.hypot(room.userData.dims?.w || 16, room.userData.dims?.d || 10) * 0.5 + 1.8
+      );
+      fill.decay = 2;
     }
     if (ceil) {
       ceil.color.setHex(room.userData.ceilBaseColor ?? 0xf4f6f8);
@@ -2088,6 +2126,15 @@ export function clearSosLighting(room, anim = null) {
       m.color.setHex(0xa8ccff);
       if (m.emissive) m.emissive.setHex(0xa8ccff);
       m.emissiveIntensity = 1.15;
+    }
+    const brand = room.userData.ceilingBrand;
+    if (brand?.material?.color) {
+      if (brand.userData.baseColor) {
+        brand.material.color.copy(brand.userData.baseColor);
+      } else {
+        brand.material.color.setHex(0xffffff);
+      }
+      brand.material.needsUpdate = true;
     }
   }
 
@@ -5942,7 +5989,7 @@ export function buildShip(scene) {
   hub.add(pedestal);
   const hubArchive = createInfoHubArchive(hub, anim);
 
-  const hubLight = new THREE.PointLight(0x88ffdd, 3.2, 20);
+  const hubLight = new THREE.PointLight(0x88ffdd, 3.2, 9);
   hubLight.position.set(0, 2.3, 0);
   hub.add(hubLight);
 

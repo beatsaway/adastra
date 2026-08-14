@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { buildShip, createSpaceView, createStatusView, updateAutoDoors, updateStallDoors, nearestInteractable, nearestLockedDoor, LOCKED_DOOR_LINES, INSUFFICIENT_DATAPOINT_LINES, pickRoomRestoredLine, updateSosLights, updatePlants, updateSleepingCrew, downgradeMaterialsForMobile, unlockShipDoor, relockAllShipDoors, clearShipBriefingProgress, debugWallMonitor, resetAllRoomSos, applyWallMonitorVisual, setWallMonitorSosBlend } from "./ship.js?v=20260815bi";
+import { buildShip, createSpaceView, createStatusView, updateAutoDoors, updateStallDoors, nearestInteractable, nearestLockedDoor, LOCKED_DOOR_LINES, INSUFFICIENT_DATAPOINT_LINES, pickRoomRestoredLine, updateSosLights, updatePlants, updateSleepingCrew, downgradeMaterialsForMobile, unlockShipDoor, relockAllShipDoors, clearShipBriefingProgress, debugWallMonitor, resetAllRoomSos, applyWallMonitorVisual, setWallMonitorSosBlend } from "./ship.js?v=20260815bj";
 import { Player } from "./player.js?v=20260815ai";
 import { isTouchDevice, setupMobileControls } from "./mobile.js";
 import { HudPrompt } from "./hud-prompt.js";
@@ -163,17 +163,17 @@ async function boot() {
   scene.add(ambLight);
   const hemi = new THREE.HemisphereLight(0xff9090, 0x401010, 0.45);
   scene.add(hemi);
-  const sosAmb = { color: new THREE.Color(0xff6060), intensity: 0.35 };
+  const sosAmb = { color: new THREE.Color(0xff7070), intensity: 0.22 };
   const sosHemi = {
-    sky: new THREE.Color(0xff9090),
-    ground: new THREE.Color(0x401010),
-    intensity: 0.45,
+    sky: new THREE.Color(0xffa0a0),
+    ground: new THREE.Color(0x401818),
+    intensity: 0.32,
   };
-  const calmAmb = { color: new THREE.Color(0xc8d4e8), intensity: 0.32 };
+  const calmAmb = { color: new THREE.Color(0xc8d4e8), intensity: 0.34 };
   const calmHemi = {
     sky: new THREE.Color(0xe8eef8),
     ground: new THREE.Color(0x2a3040),
-    intensity: 0.42,
+    intensity: 0.44,
   };
   let globalLightBlend = 1; // 1 = full SOS pink, 0 = calm
 
@@ -1533,9 +1533,9 @@ async function boot() {
       const sosHere = room ? room.lightMode === "sos" : !!ship.anim?.sosActive;
       ambience.setSos(sosHere);
       ambience.update(dt);
-      // Global pink fill was always-on SOS — ease back to cool light when ship is clear
-      const wantSos = ship.anim?.sosActive ? 1 : 0;
-      globalLightBlend += (wantSos - globalLightBlend) * Math.min(1, dt * 2.4);
+      // Global fill follows the room you're in — not cockpit SOS bleeding ship-wide
+      const wantSos = sosHere ? 1 : 0;
+      globalLightBlend += (wantSos - globalLightBlend) * Math.min(1, dt * 2.8);
       const g = globalLightBlend;
       ambLight.color.copy(calmAmb.color).lerp(sosAmb.color, g);
       ambLight.intensity = calmAmb.intensity + (sosAmb.intensity - calmAmb.intensity) * g;
