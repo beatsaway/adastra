@@ -1,5 +1,7 @@
 import * as THREE from "three";
-import { shipVoice } from "./ai-voice.js";
+import { shipVoice } from "./ai-voice.js?v=20260815cj";
+import { pickNpcChitchatLine } from "./npc-chitchat.js?v=20260815cs";
+import { playThinkDot, playNpcBonk } from "../sfx/npc-fun.js?v=20260815cp";
 import { playBriefStart } from "../sfx/brief.js";
 import { isDoorUnlocked as isDoorAlreadyUnlocked, markDoorUnlocked, DOOR_UNLOCK_COST, MONITOR_DEBUG_COST, isMonitorDebugged, isNpcActivated, markNpcActivated } from "./datapoints.js?v=adastra1000";
 
@@ -942,11 +944,23 @@ function roomDoorLocked(label = "") {
   );
 }
 
-function roundedRectShape(w, h, r) {
+function roundedRectShape(w, h, r, clockwise = false) {
   const hw = w * 0.5;
   const hh = h * 0.5;
   const rr = Math.min(r, hw * 0.45, hh * 0.45);
   const s = new THREE.Shape();
+  if (clockwise) {
+    s.moveTo(-hw + rr, -hh);
+    s.quadraticCurveTo(-hw, -hh, -hw, -hh + rr);
+    s.lineTo(-hw, hh - rr);
+    s.quadraticCurveTo(-hw, hh, -hw + rr, hh);
+    s.lineTo(hw - rr, hh);
+    s.quadraticCurveTo(hw, hh, hw, hh - rr);
+    s.lineTo(hw, -hh + rr);
+    s.quadraticCurveTo(hw, -hh, hw - rr, -hh);
+    s.lineTo(-hw + rr, -hh);
+    return s;
+  }
   s.moveTo(-hw + rr, -hh);
   s.lineTo(hw - rr, -hh);
   s.quadraticCurveTo(hw, -hh, hw, -hh + rr);
@@ -961,6 +975,25 @@ function roundedRectShape(w, h, r) {
 
 function extrudeRounded(w, h, depth, radius, material) {
   const geo = new THREE.ExtrudeGeometry(roundedRectShape(w, h, radius), {
+    depth,
+    bevelEnabled: false,
+    curveSegments: 10,
+  });
+  geo.translate(0, 0, -depth * 0.5);
+  const mesh = new THREE.Mesh(geo, material);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+/** Picture-frame rim (outer minus inner hole) so the glass can sit recessed. */
+function extrudeRoundedFrame(w, h, depth, radius, border, material) {
+  const outer = roundedRectShape(w, h, radius);
+  const innerW = Math.max(0.06, w - border * 2);
+  const innerH = Math.max(0.06, h - border * 2);
+  const innerR = Math.max(0.012, radius - border * 0.35);
+  outer.holes.push(roundedRectShape(innerW, innerH, innerR, true));
+  const geo = new THREE.ExtrudeGeometry(outer, {
     depth,
     bevelEnabled: false,
     curveSegments: 10,
@@ -1111,20 +1144,21 @@ function makeGlassDoor(room, doorsOut, doorKeys, {
   const panelH = holeH - clearance;
   const radius = Math.max(0.08, holeR - clearance * 0.5);
 
+  const cockpitPane = /cockpit/i.test(String(roomLabel || ""));
   const glassMat = new THREE.MeshPhysicalMaterial({
-    color: 0x9eb8c8,
-    metalness: 0.08,
-    roughness: 0.22,
-    // Keep a hint of glass — not a see-through tunnel across the ship
-    transmission: 0.18,
-    thickness: 0.55,
+    color: cockpitPane ? 0xb7dcec : 0x9eb8c8,
+    metalness: cockpitPane ? 0.04 : 0.08,
+    roughness: cockpitPane ? 0.06 : 0.22,
+    transmission: cockpitPane ? 0.36 : 0.18,
+    thickness: cockpitPane ? 0.32 : 0.55,
     ior: 1.45,
     transparent: true,
-    opacity: 0.92,
+    opacity: cockpitPane ? 0.62 : 0.92,
     depthWrite: true,
     side: THREE.DoubleSide,
   });
   glassMat.userData.doorGlass = true;
+  if (cockpitPane) glassMat.userData.cockpitGlass = true;
   // Opaque seal while locked — clear glass was an x-ray into the room / unlock text
   const sealedMat = new THREE.MeshStandardMaterial({
     color: 0xa8b2bc,
@@ -1196,6 +1230,15 @@ function makeGlassDoor(room, doorsOut, doorKeys, {
     slide.add(unlockHolo);
   }
 
+  let denyHolo = null;
+  if (cockpitPane) {
+    denyHolo = makeAccessDeniedHolo();
+    // Inner face of the south hatch (local +Z = into the cockpit)
+    denyHolo.position.set(0, holeY - 0.42, 0.12);
+    denyHolo.visible = false;
+    slide.add(denyHolo);
+  }
+
   doorsOut.push({
     key,
     panel: slide,
@@ -1214,6 +1257,7 @@ function makeGlassDoor(room, doorsOut, doorKeys, {
     savedBlockCollider: blockCollider,
     colliders,
     unlockHolo,
+    denyHolo,
     roomLabel: String(roomLabel || room?.userData?.label || ""),
   });
 }
@@ -1749,18 +1793,19 @@ function makeFullCeilingLight(room, color, emissiveIntensity = 1.25) {
   m.emissiveIntensity = emissiveIntensity;
   m.roughness = 0.45;
   m.metalness = 0.05;
-  m.needsUpdate = true;
 }
 
 /** Rounded rectangular outline light on the ceiling (hollow frame) */
 function makeRectOutlineLight(room, color, marginScale = 0.12, bar = 0.28) {
   const { w, d, h } = room.userData.dims || { w: 8, d: 8, h: 5 };
   if (room.userData.ceilingRing) room.userData.ceilingRing.visible = false;
-  // remove prior outline if restyled
-  if (room.userData.rectOutline) {
-    room.remove(room.userData.rectOutline);
-    room.userData.rectOutline.geometry?.dispose?.();
-    room.userData.rectOutline = null;
+  if (room.userData.rectOutline && room.userData.rectOutlineMat) {
+    const m = room.userData.rectOutlineMat;
+    m.color.setHex(color);
+    if (m.emissive) m.emissive.setHex(color);
+    m.emissiveIntensity = 1.45;
+    room.userData.rectOutline.visible = true;
+    return room.userData.rectOutline;
   }
 
   const mx = w * marginScale;
@@ -1845,7 +1890,8 @@ function styleRoomLighting(room, kind) {
     fill.intensity = intensity;
     fill.distance = Math.min(span * 0.95, Math.hypot(w, d) * 0.55 + 2);
     fill.decay = 2;
-    fill.visible = intensity > 0.01;
+    // Keep the light in the scene graph. Toggling .visible changes Three's
+    // light count and recompiles every Standard/Physical material (big hitch).
   };
   const hideRing = () => { if (ring) ring.visible = false; };
 
@@ -1930,34 +1976,11 @@ export function applySosLighting(room) {
     key.color.setHex(SOS_RED);
     key.intensity = keyBase;
     key.userData.sosBaseIntensity = keyBase;
-    const dims = room.userData.dims;
-    if (dims) {
-      const span = Math.max(dims.w, dims.d);
-      key.distance = Math.min(span * 1.0, Math.hypot(dims.w, dims.d) * 0.58 + 2);
-      key.decay = 2;
-    }
   }
   if (fill) {
     fill.color.setHex(SOS_RED_FILL);
     fill.intensity = fillBase;
-    fill.visible = true;
     fill.userData.sosBaseIntensity = fillBase;
-    const dims = room.userData.dims;
-    if (dims) {
-      const span = Math.max(dims.w, dims.d);
-      fill.distance = Math.min(span * 0.9, Math.hypot(dims.w, dims.d) * 0.5 + 1.8);
-      fill.decay = 2;
-    }
-  }
-  // Cockpit Ad Astra ceiling brand — tint with SOS (emissive text, not a light)
-  const brand = room.userData.ceilingBrand;
-  if (brand?.material?.color) {
-    if (!brand.userData.baseColor) {
-      brand.userData.baseColor = brand.material.color.clone();
-    }
-    brand.material.color.setHex(0xff6a6a);
-    brand.material.opacity = Math.min(1, (brand.material.opacity || 1) * 1.05);
-    brand.material.needsUpdate = true;
   }
   if (ring?.material) {
     ring.material.color.setHex(SOS_RED);
@@ -1972,7 +1995,6 @@ export function applySosLighting(room) {
     m.emissive.setHex(SOS_RED);
     m.emissiveIntensity = 1.15;
     m.userData.sosBaseEmissive = 1.15;
-    m.needsUpdate = true;
   }
   if (room.userData.rectOutlineMat) {
     const m = room.userData.rectOutlineMat;
@@ -2107,7 +2129,6 @@ export function clearSosLighting(room, anim = null) {
     if (ceil.emissive) ceil.emissive.setHex(0x000000);
     ceil.emissiveIntensity = 0;
     if (ceil.userData) delete ceil.userData.sosBaseEmissive;
-    ceil.needsUpdate = true;
   }
   const ring = room.userData.ceilingRing;
   if (ring?.material?.userData) delete ring.material.userData.sosBaseEmissive;
@@ -2134,7 +2155,6 @@ export function clearSosLighting(room, anim = null) {
     if (fill) {
       fill.color.setHex(0xd0e4ff);
       fill.intensity = 0.75;
-      fill.visible = true;
       fill.distance = Math.min(
         Math.max(room.userData.dims?.w || 16, room.userData.dims?.d || 10) * 0.9,
         Math.hypot(room.userData.dims?.w || 16, room.userData.dims?.d || 10) * 0.5 + 1.8
@@ -2145,22 +2165,12 @@ export function clearSosLighting(room, anim = null) {
       ceil.color.setHex(room.userData.ceilBaseColor ?? 0xf4f6f8);
       if (ceil.emissive) ceil.emissive.setHex(0x000000);
       ceil.emissiveIntensity = 0;
-      ceil.needsUpdate = true;
     }
     if (room.userData.rectOutlineMat) {
       const m = room.userData.rectOutlineMat;
       m.color.setHex(0xa8ccff);
       if (m.emissive) m.emissive.setHex(0xa8ccff);
       m.emissiveIntensity = 1.15;
-    }
-    const brand = room.userData.ceilingBrand;
-    if (brand?.material?.color) {
-      if (brand.userData.baseColor) {
-        brand.material.color.copy(brand.userData.baseColor);
-      } else {
-        brand.material.color.setHex(0xffffff);
-      }
-      brand.material.needsUpdate = true;
     }
   }
 
@@ -2263,10 +2273,52 @@ export function setWallMonitorSosBlend(wm, u) {
     const n = i % 2 ? 0x66ffcc : 0x44aaff;
     rm.color.setHex(lerpC(o, n));
   }
-  if (wm.underGlowMat?.emissive) {
+  if (wm.underGlowMat) {
     const c = lerpC(0xff7a33, 0x3ec8ff);
-    wm.underGlowMat.emissive.setHex(c);
+    if (wm.underGlowMat.emissive) wm.underGlowMat.emissive.setHex(c);
     if (wm.underGlowMat.color) wm.underGlowMat.color.setHex(c);
+  }
+}
+
+/** Slow red → orange-red wash on undebugged SOS wall monitors (keep green low so it never reads yellow). */
+export function updateWallMonitorSosPulse(anim, t) {
+  const mons = anim?.wallMonitors;
+  if (!mons?.length) return;
+  // ~12s full cycle (sin period 2π / 0.52)
+  const wave = (Math.sin(t * 0.52) + 1) * 0.5;
+  const waveB = (Math.sin(t * 0.52 + 0.85) + 1) * 0.5;
+  for (let i = 0; i < mons.length; i++) {
+    const wm = mons[i];
+    if (!wm || wm.repairing || wm.debugged) continue;
+    if (wm.room?.userData?.lightMode !== "sos") continue;
+    const p = (Math.sin(t * 0.52 + i * 0.35) + 1) * 0.5;
+    // 0 = blood red · 1 = orange-red (green capped so emissive doesn't bloom yellow)
+    const g = 0.035 + p * 0.185;
+    const b = 0.028 + p * 0.018;
+    const sm = wm.screenMat;
+    if (sm) {
+      if (sm.emissive) sm.emissive.setRGB(1, g, b);
+      sm.color.setRGB(0.24 + p * 0.1, 0.025 + p * 0.04, 0.02);
+      if (sm.emissiveIntensity != null) sm.emissiveIntensity = 0.72 + p * 0.16;
+    }
+    const barG = 0.05 + waveB * 0.18;
+    const barB = 0.03 + waveB * 0.02;
+    for (const bm of wm.barMats || []) {
+      if (bm.emissive) bm.emissive.setRGB(1, barG, barB);
+      if (bm.color) bm.color.setRGB(1, barG, barB);
+    }
+    for (let k = 0; k < (wm.ringMats || []).length; k++) {
+      const rm = wm.ringMats[k];
+      if (!rm?.color) continue;
+      const q = k % 2 ? waveB : wave;
+      rm.color.setRGB(1, 0.04 + q * 0.2, 0.03 + q * 0.02);
+    }
+    if (wm.underGlowMat) {
+      const ug = wm.underGlowMat;
+      const ugG = 0.045 + p * 0.175;
+      if (ug.emissive) ug.emissive.setRGB(1, ugG, 0.03);
+      if (ug.color) ug.color.setRGB(1, ugG, 0.03);
+    }
   }
 }
 
@@ -2523,6 +2575,7 @@ function makeAvatarArm(scale, material, side) {
   const w = 0.26 * scale;
   const h = 0.78 * scale;
   const mesh = extrudeRoundedLimb(w, h, 0.28 * scale, 0.08 * scale, material);
+  // Origin = inner-top (shoulder). Hang down (−Y) and out from the torso.
   const outX = side === "left" ? -w * 0.5 : w * 0.5;
   mesh.geometry.translate(outX, -h * 0.5, 0);
   const p = armShoulderPos(scale, side);
@@ -2569,6 +2622,7 @@ function createCrewAvatar(scale = 0.44) {
   faceScreen.receiveShadow = false;
   head.add(faceScreen);
   group.userData.faceScreen = faceScreen;
+  group.userData.faceGlow = faceGlow;
 
   const body = extrudeRounded(0.86 * scale, 0.95 * scale, 0.56 * scale, 0.1 * scale, bodyMat);
   body.position.y = 0.1 * scale;
@@ -2594,6 +2648,198 @@ function createCrewAvatar(scale = 0.44) {
   group.userData.rightLeg = rightLeg;
   group.userData.state = "idle";
   return group;
+}
+
+function npcRoleLabel(role) {
+  return String(role || "crew").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function splitTwoRows(text) {
+  const parts = String(text || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return ["", ""];
+  if (parts.length === 1) return [parts[0], ""];
+  if (parts.length === 2) return [parts[0], parts[1]];
+  const mid = Math.ceil(parts.length / 2);
+  return [parts.slice(0, mid).join(" "), parts.slice(mid).join(" ")];
+}
+
+function paintTwoLineTag(ctx, w, h, line1, line2, color) {
+  ctx.clearRect(0, 0, w, h);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.shadowColor = "rgba(0,0,0,0.65)";
+  ctx.shadowBlur = 10;
+  ctx.fillStyle = color;
+  ctx.font = "bold 88px ui-sans-serif, Segoe UI, sans-serif";
+  if (line2) {
+    ctx.fillText(line1, w / 2, h * 0.34, w - 28);
+    ctx.fillText(line2, w / 2, h * 0.68, w - 28);
+  } else {
+    ctx.fillText(line1, w / 2, h / 2 + 4, w - 28);
+  }
+}
+
+function makeNpcCanvasTexture(w, h) {
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = false;
+  return { canvas, ctx: canvas.getContext("2d"), tex };
+}
+
+function npcLabelMaterial(tex) {
+  return new THREE.MeshBasicMaterial({
+    map: tex,
+    transparent: true,
+    depthWrite: false,
+    toneMapped: false,
+    alphaTest: 0.02,
+  });
+}
+
+/** Role on the back, two rows, big type. */
+function applyNpcBackTag(av) {
+  const body = av?.userData?.body;
+  if (!body || body.userData.backTag) return;
+  const s = av.userData.sleepScale || 0.4;
+  const [a, b] = splitTwoRows(npcRoleLabel(av.userData.npcRole));
+  const tw = 512;
+  const th = 256;
+  const { ctx, tex } = makeNpcCanvasTexture(tw, th);
+  paintTwoLineTag(ctx, tw, th, a, b, "#f0f4f8");
+  tex.needsUpdate = true;
+
+  const tag = roundedPlane(0.8 * s, 0.42 * s, 0.08 * s, npcLabelMaterial(tex));
+  tag.position.set(0, 0.06 * s, -0.29 * s);
+  tag.rotation.y = Math.PI;
+  tag.castShadow = false;
+  tag.receiveShadow = false;
+  body.add(tag);
+  body.userData.backTag = tag;
+}
+
+/** Printed name on the aisle-facing foot of their bunk. */
+function applyBedNamePlate(bed, name) {
+  if (!bed || bed.userData.bedName || !name) return;
+  const tw = 512;
+  const th = 160;
+  const { ctx, tex } = makeNpcCanvasTexture(tw, th);
+  ctx.clearRect(0, 0, tw, th);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "#2a3340";
+  ctx.font = "bold 84px ui-sans-serif, Segoe UI, sans-serif";
+  ctx.fillText(String(name).trim(), tw / 2, th / 2 + 4, tw - 24);
+  tex.needsUpdate = true;
+
+  const plate = roundedPlane(1.02, 0.3, 0.05, npcLabelMaterial(tex));
+  plate.position.set(0, 0.28, 1.065);
+  plate.castShadow = false;
+  plate.receiveShadow = false;
+  bed.add(plate);
+  bed.userData.bedName = plate;
+}
+
+/** First name on the chest, one line, extra-big type. */
+function applyNpcChestTag(av) {
+  const body = av?.userData?.body;
+  if (!body || body.userData.chestTag) return;
+  const s = av.userData.sleepScale || 0.4;
+  const first = String(av.userData.npcName || "Crew").trim().split(/\s+/)[0] || "Crew";
+  const tw = 512;
+  const th = 160;
+  const { ctx, tex } = makeNpcCanvasTexture(tw, th);
+  ctx.clearRect(0, 0, tw, th);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.shadowColor = "rgba(0,0,0,0.65)";
+  ctx.shadowBlur = 10;
+  ctx.fillStyle = "#f4f7fb";
+  ctx.font = "bold 132px ui-sans-serif, Segoe UI, sans-serif";
+  ctx.fillText(first, tw / 2, th / 2 + 6, tw - 20);
+  tex.needsUpdate = true;
+
+  const tag = roundedPlane(0.82 * s, 0.3 * s, 0.08 * s, npcLabelMaterial(tex));
+  tag.position.set(0, 0.06 * s, 0.29 * s);
+  tag.castShadow = false;
+  tag.receiveShadow = false;
+  body.add(tag);
+  body.userData.chestTag = tag;
+}
+
+const THINK_STEP = 0.42;
+
+function setNpcThinkFrame(av, frame, tick = false) {
+  const plate = av?.userData?.thinkPlate;
+  if (!plate) return;
+  const next = frame > 0 ? frame : 0;
+  const changed = plate.userData.frame !== next;
+  if (!changed) {
+    plate.visible = next > 0;
+    return;
+  }
+  plate.userData.frame = next;
+  plate.visible = next > 0;
+  if (next <= 0) return;
+  if (tick) playThinkDot(next);
+  const { ctx, canvas, tex } = plate.userData;
+  const w = canvas.width;
+  const h = canvas.height;
+  const glow = av.userData.faceGlow || av.userData.faceScreen?.material?.emissive;
+  const ink = (glow ? glow.clone() : new THREE.Color(0x3a5a72)).lerp(new THREE.Color(0x121820), 0.72);
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = `#${ink.getHexString()}`;
+  const r = 18;
+  const gap = 42;
+  const x0 = 36;
+  const y = h / 2;
+  for (let i = 0; i < next; i++) {
+    ctx.beginPath();
+    ctx.arc(x0 + i * gap, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  tex.needsUpdate = true;
+}
+
+/** Dots sit on the CRT — transparent rounded overlay, no black plate. */
+function ensureNpcThinkScreen(av) {
+  const screen = av?.userData?.faceScreen;
+  if (!screen || av.userData.thinkPlate) return;
+  if (screen.userData.namePlate) {
+    screen.remove(screen.userData.namePlate);
+    screen.userData.namePlate.geometry?.dispose?.();
+    screen.userData.namePlate.material?.map?.dispose?.();
+    screen.userData.namePlate.material?.dispose?.();
+    screen.userData.namePlate = null;
+  }
+  const { canvas, ctx, tex } = makeNpcCanvasTexture(256, 192);
+  ctx.clearRect(0, 0, 256, 192);
+  const plate = roundedPlane(
+    0.70,
+    0.52,
+    0.08,
+    new THREE.MeshBasicMaterial({
+      map: tex,
+      transparent: true,
+      depthWrite: false,
+      toneMapped: false,
+      alphaTest: 0.02,
+    }),
+  );
+  plate.position.z = 0.04;
+  plate.castShadow = false;
+  plate.receiveShadow = false;
+  plate.visible = false;
+  plate.userData.frame = 0;
+  plate.userData.canvas = canvas;
+  plate.userData.ctx = ctx;
+  plate.userData.tex = tex;
+  screen.add(plate);
+  av.userData.thinkPlate = plate;
 }
 
 /** Put avatar into sitting state on a control chair (pose + idle fidget data). */
@@ -2815,6 +3061,10 @@ function layCrewInBed(bed, spec, scale = 0.4) {
   av.userData.npcDuty = spec.duty;
   av.userData.npcWork = spec.work;
   av.userData.sleepScale = scale;
+  applyNpcBackTag(av);
+  applyNpcChestTag(av);
+  ensureNpcThinkScreen(av);
+  applyBedNamePlate(bed, spec.name);
   av.userData.sleep = {
     phase: Math.random() * Math.PI * 2,
     baseY: av.position.y,
@@ -2867,7 +3117,14 @@ function workPathFor(work, aisle, npcId = "") {
   };
   const pts = [aisle, ...(routes[work] || routes.crewDeck)];
   const seat = WORK_SEATS[npcId];
-  if (seat) pts.push({ x: seat.x, z: seat.z });
+  if (seat) {
+    const rotY = seat.rotY || 0;
+    const back = 0.92;
+    pts.push({
+      x: seat.x - Math.sin(rotY) * back,
+      z: seat.z - Math.cos(rotY) * back,
+    });
+  }
   return compactWalkPath(pts);
 }
 
@@ -3174,6 +3431,7 @@ function updateWakeAcknowledge(av, w, playerPos, dt, t, standY) {
 
   const face = Math.atan2(dx, dz);
   const baseYaw = w.ackBaseYaw ?? av.rotation.y;
+  // Glance: a small body twist off the patrol heading, not a full face-to-player.
   const toward = wrapPi(face - baseYaw);
   const bodyYaw = THREE.MathUtils.clamp(toward, -0.38, 0.38);
   let dyaw = wrapPi(baseYaw + bodyYaw - av.rotation.y);
@@ -3225,6 +3483,7 @@ export function updateAwakeCrew(crew, dt, t, autoDoors = null, playerPos = null)
       w.t -= dt;
       const flapR = Math.sin(t * 9.5) * 0.42;
       const flapL = Math.sin(t * 9.5 + 0.32) * 0.42;
+      // Shoulder pivot: hang −Y. +Z raises the right arm; −Z raises the left.
       const cheerY = 0.40 * scale;
       if (rightArm) {
         rightArm.rotation.z = 1.95 + flapR;
@@ -3245,8 +3504,8 @@ export function updateAwakeCrew(crew, dt, t, autoDoors = null, playerPos = null)
         const name = av.userData.npcName || "crew";
         const role = av.userData.npcRole || "crew";
         const duty = av.userData.npcDuty || "I'll get to work.";
-        shipVoice.speak("Thanks for dehibernating me, Captain.");
-        shipVoice.speak("I'm " + name + ", " + role + ". " + duty);
+        shipVoice.speakNpc("Thanks for dehibernating me, Captain.", av.userData.npcId);
+        shipVoice.speakNpc("I'm " + name + ", " + role + ". " + duty, av.userData.npcId);
       }
       if (w.phase === "talk" && w.spoke && w.t <= 0 && !shipVoice.speaking) {
         w.phase = "walk";
@@ -3506,6 +3765,143 @@ export function updateSittingCrew(crew, dt, t, playerPos = null, maxDist = 26) {
     head.rotation.x = s.headX;
     head.rotation.y = s.headY;
     head.rotation.z = s.headZ;
+  }
+}
+
+const CHAT_RADIUS = 1.85;
+const CHAT_RADIUS2 = CHAT_RADIUS * CHAT_RADIUS;
+
+function npcChatEligible(av) {
+  const st = av?.userData?.state;
+  if (!st || st === "sleeping") return false;
+  const phase = av.userData.wake?.phase;
+  if (phase === "rise" || phase === "wave" || phase === "talk" || phase === "hop") return false;
+  return true;
+}
+
+/**
+ * If the captain lingers 1–10s near a woken NPC, they offer a random line.
+ * Uses trySpeak so briefings and door VO are never interrupted.
+ */
+export function updateNpcChitchat(crew, dt, playerPos = null) {
+  if (!crew?.length || !playerPos) return;
+
+  let best = null;
+  let bestD2 = CHAT_RADIUS2;
+  for (let i = 0; i < crew.length; i++) {
+    const av = crew[i];
+    if (!npcChatEligible(av)) continue;
+    av.getWorldPosition(_avWorld);
+    const d2 = _avWorld.distanceToSquared(playerPos);
+    if (d2 < bestD2) {
+      bestD2 = d2;
+      best = av;
+    }
+  }
+
+  const speakerId = shipVoice.npcId;
+  const talkFrame = ((Math.max(1, shipVoice.npcPulse || 1) - 1) % 3) + 1;
+
+  for (let i = 0; i < crew.length; i++) {
+    const av = crew[i];
+    const chat = av.userData.chat || (av.userData.chat = {
+      nearT: 0,
+      wait: 0,
+      cool: 0,
+      recent: [],
+    });
+    if (speakerId && av.userData.npcId === speakerId) {
+      if (chat.cool > 0) chat.cool -= dt;
+      setNpcThinkFrame(av, talkFrame);
+      continue;
+    }
+    if (av !== best) {
+      chat.nearT = 0;
+      chat.wait = 0;
+      // Walking away (or another NPC becoming nearest) frees this one
+      // so the next approach can think and talk again.
+      chat.cool = 0;
+      setNpcThinkFrame(av, 0);
+      continue;
+    }
+    if (chat.cool > 0) {
+      chat.cool -= dt;
+      chat.nearT = 0;
+      setNpcThinkFrame(av, 0);
+      continue;
+    }
+    if (shipVoice.speaking) {
+      setNpcThinkFrame(av, 0);
+      continue;
+    }
+    if (!chat.wait) chat.wait = 1 + Math.random() * 9;
+    chat.nearT += dt;
+    // thinking: . . . → . . → . until they speak
+    const cycle = Math.floor(chat.nearT / THINK_STEP) % 3;
+    setNpcThinkFrame(av, cycle === 0 ? 3 : cycle === 1 ? 2 : 1, true);
+    if (chat.nearT < chat.wait) continue;
+    const line = pickNpcChitchatLine(av.userData.npcId, chat.recent);
+    if (!line) {
+      chat.nearT = 0;
+      chat.wait = 1 + Math.random() * 9;
+      continue;
+    }
+    if (!shipVoice.trySpeakNpc(line, av.userData.npcId)) continue;
+    setNpcThinkFrame(av, 1);
+    chat.recent.push(line);
+    if (chat.recent.length > 12) chat.recent.shift();
+    chat.nearT = 0;
+    chat.wait = 1 + Math.random() * 9;
+    chat.cool = 14 + Math.random() * 16;
+  }
+}
+
+export function isNpcWaiting(av) {
+  if (!npcChatEligible(av)) return false;
+  if (shipVoice.npcId && av.userData.npcId === shipVoice.npcId) return false;
+  const plate = av.userData.thinkPlate;
+  return !!(plate && plate.visible && (plate.userData.frame || 0) > 0);
+}
+
+export function waitingNpcFromHit(obj, crew) {
+  const av = sleeperFromHit(obj, crew);
+  return av && isNpcWaiting(av) ? av : null;
+}
+
+/** Metallic poke + a little random wiggle. */
+export function pokeWaitingNpc(av) {
+  if (!isNpcWaiting(av)) return false;
+  const wig = av.userData.wiggle;
+  if (wig && wig.t < 0.22) return false;
+  playNpcBonk();
+  const sit = av.userData.state === "sitting";
+  const dir = Math.random() < 0.5 ? -1 : 1;
+  av.userData.wiggle = {
+    t: 0,
+    dur: 0.36 + Math.random() * 0.2,
+    yaw: dir * (0.14 + Math.random() * 0.16),
+    x: sit ? 0 : dir * (0.03 + Math.random() * 0.04),
+    z: sit ? 0 : (Math.random() - 0.5) * 0.05,
+    headZ: dir * (0.12 + Math.random() * 0.1),
+  };
+  return true;
+}
+
+export function updateNpcWiggle(crew, dt) {
+  if (!crew?.length) return;
+  for (let i = 0; i < crew.length; i++) {
+    const av = crew[i];
+    const wig = av.userData.wiggle;
+    if (!wig) continue;
+    wig.t += dt;
+    const u = Math.min(1, wig.t / wig.dur);
+    const wave = Math.sin(u * Math.PI);
+    av.rotation.y += wig.yaw * wave;
+    av.position.x += wig.x * wave;
+    av.position.z += wig.z * wave;
+    const head = av.userData.head;
+    if (head) head.rotation.z += wig.headZ * wave;
+    if (u >= 1) av.userData.wiggle = null;
   }
 }
 
@@ -5101,7 +5497,7 @@ export function updateStallDoors(interactables, dt) {
   const speed = 2.2;
   for (let i = 0; i < interactables.length; i++) {
     const d = interactables[i];
-    if (d.kind === "bedShield") continue; // leftover — pods are click/tap now
+    if (d.kind === "bedShield") continue; // snap toggle — no tween
     if (d.kind === "toiletLid") {
       d.amount += (d.target - d.amount) * Math.min(1, 3.8 * dt);
       if (d.amount < 0.001) d.amount = 0;
@@ -5141,7 +5537,6 @@ export function nearestInteractable(interactables, pos) {
   if (!interactables) return null;
   for (let i = 0; i < interactables.length; i++) {
     const it = interactables[i];
-    if (it.kind === "bedShield" || it.kind === "wallMonitor") continue;
     if (typeof it.active === "function" && !it.active()) continue;
     const dx = pos.x - it.position.x;
     const dz = pos.z - it.position.z;
@@ -5282,7 +5677,6 @@ function makeInfoHubDoorHolo(room, anim, {
     transparent: true,
     opacity: 0.62,
     side: THREE.DoubleSide,
-    depthTest: true,
     depthWrite: false,
     toneMapped: false,
   });
@@ -5290,15 +5684,18 @@ function makeInfoHubDoorHolo(room, anim, {
     new THREE.PlaneGeometry(planeH * aspect, planeH),
     mat
   );
-  const inset = 0.35;
+  const fromSouth = wz < 2;
+  plane.userData.infoHubFromSouth = fromSouth;
   // Lower in the doorway so it reads near mid-opening, not head height
   const holoY = Math.max(0.95, holeY - 0.55);
   if (axis === "x") {
-    const inward = -Math.sign(localZ || 1);
-    plane.position.set(localX, holoY, localZ + inward * inset);
+    // South path: sit in the opening (toward hub) so INFO HUB is readable from the hub
+    const along = fromSouth ? 1 : -Math.sign(localZ || 1);
+    const pad = fromSouth ? 0.12 : 0.35;
+    plane.position.set(localX, holoY, localZ + along * pad);
   } else {
     const inward = -Math.sign(localX || 1);
-    plane.position.set(localX + inward * inset, holoY, localZ);
+    plane.position.set(localX + inward * 0.35, holoY, localZ);
     plane.rotation.y = Math.PI / 2;
   }
   plane.renderOrder = 1;
@@ -5309,7 +5706,7 @@ function makeInfoHubDoorHolo(room, anim, {
 
 /** Reddish unlock hologram on a sealed door (click / tap target). */
 function makeDoorUnlockHolo() {
-  const lines = ["Unlock with", DOOR_UNLOCK_COST + " data points"];
+  const lines = ["Repair with", DOOR_UNLOCK_COST + " data points"];
   const red = makeHoloLinesTexture(lines, {
     fill: "#e85a5a",
     shadow: "rgba(180, 40, 40, 0.75)",
@@ -5341,6 +5738,32 @@ function makeDoorUnlockHolo() {
   plane.userData.baseOpacity = 0.22;
   plane.userData.hoverOpacity = 0.95;
   plane.userData.flashOpacity = 1;
+  return plane;
+}
+
+/** Red ACCESS DENIED label on the cockpit hatch (flashed on deny). */
+function makeAccessDeniedHolo() {
+  const { tex, aspect } = makeHoloLinesTexture(["ACCESS", "DENIED"], {
+    fill: "#ff2a2a",
+    shadow: "rgba(255, 24, 24, 1)",
+    fontPx: 96,
+  });
+  const planeH = 1.02;
+  const mat = new THREE.MeshBasicMaterial({
+    map: tex,
+    transparent: true,
+    opacity: 0.95,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+    toneMapped: false,
+  });
+  const plane = new THREE.Mesh(
+    new THREE.PlaneGeometry(planeH * aspect, planeH),
+    mat
+  );
+  plane.renderOrder = 8;
+  plane.userData.denyHolo = true;
+  plane.userData.baseOpacity = 0.95;
   return plane;
 }
 
@@ -5681,16 +6104,26 @@ function makeBigScreen(group, anim, x, y, z, w, h, rotY = 0, opts = {}) {
     emissive: 0x1a90cc, emissiveIntensity: 0.9, roughness: 0.35, metalness: 0.1,
   });
 
-  // rounded bezel (solid)
-  const bezel = extrudeRounded(w + 0.28, h + 0.28, 0.14, radius + 0.06, bezelMat);
-  bezel.position.z = -0.05;
-  g.add(bezel);
+  // Backing closer to the wall; proud rim around a recessed glass (garden ring vs soil)
+  const rimW = 0.14;
+  const back = extrudeRounded(w + 0.28, h + 0.28, 0.07, radius + 0.06, bezelMat);
+  back.position.z = -0.015;
+  g.add(back);
 
-  // display face: flat rounded plane with proper UVs so space-view map works
+  const screenZ = 0.028;
+  const faceZ = screenZ + 0.01;
   const screen = roundedPlane(w, h, radius, screenMat);
-  screen.position.z = 0.08;
+  screen.position.z = screenZ;
   g.add(screen);
   anim.screens.push(screen);
+
+  const rimDepth = 0.11;
+  const rimFront = 0.125;
+  const rim = extrudeRoundedFrame(
+    w + 0.28, h + 0.28, rimDepth, radius + 0.06, rimW, bezelMat
+  );
+  rim.position.z = rimFront - rimDepth * 0.5;
+  g.add(rim);
 
   const deco = new THREE.Group();
   g.add(deco);
@@ -5703,7 +6136,7 @@ function makeBigScreen(group, anim, x, y, z, w, h, rotY = 0, opts = {}) {
       emissive: 0x44ffcc, emissiveIntensity: 0.85,
     });
     barMats.push(barMat);
-    const bar = box(bw, 0.05, 0.01, barMat, -w * 0.22 + (i % 3) * 0.22, h * 0.22 - Math.floor(i / 3) * 0.28, 0.09);
+    const bar = box(bw, 0.05, 0.01, barMat, -w * 0.22 + (i % 3) * 0.22, h * 0.22 - Math.floor(i / 3) * 0.28, faceZ);
     anim.bars.push(bar);
     deco.add(bar);
   }
@@ -5733,15 +6166,26 @@ function makeBigScreen(group, anim, x, y, z, w, h, rotY = 0, opts = {}) {
       new THREE.RingGeometry(s.r0, s.r1, 48, 1, s.start, s.len),
       ringMat
     );
-    seg.position.set(cx, cy, 0.09);
+    seg.position.set(cx, cy, faceZ);
     const dir = i % 2 === 0 ? 1 : -1;
     seg.userData.spinSpeed = dir * (0.25 + i * 0.38 + (i * 0.17) % 0.4);
     deco.add(seg);
     anim.screenRings.push(seg);
   }
 
-  const underGlowMat = mat(GLOW_CYAN, { emissive: GLOW_CYAN, emissiveIntensity: 1.1 });
-  g.add(box(w * 0.85, 0.05, 0.08, underGlowMat, 0, -h / 2 - 0.1, 0.05));
+  const underGlowMat = new THREE.MeshBasicMaterial({
+    color: GLOW_CYAN,
+    transparent: true,
+    opacity: 0.95,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    toneMapped: false,
+  });
+  // LED on the bottom rim of the proud frame (Ad Astra under-bar, seated on the bezel)
+  const outerW = w + 0.28;
+  const outerH = h + 0.28;
+  const bottomY = -outerH / 2 + rimW * 0.5;
+  g.add(box(outerW - rimW * 0.45, 0.03, 0.042, underGlowMat, 0, bottomY, rimFront + 0.02));
 
   if (opts.interactive) {
     g.userData.interactiveScreen = true;
@@ -5763,7 +6207,7 @@ function makeBigScreen(group, anim, x, y, z, w, h, rotY = 0, opts = {}) {
       barMats,
       ringMats,
       underGlowMat,
-    }, { maxW: w, maxH: h, z: 0.081 });
+    }, { maxW: w, maxH: h, z: faceZ + 0.002 });
   }
 
   return g;
@@ -5909,17 +6353,17 @@ const STATUS_PAGES = [
     "Captain.",
     "",
     "A solar storm hit.",
-    "The ship held. My database did not.",
+    "The ship held but my database has been damaged.",
     "",
-    "I'm still online — most of me is gone.",
+    "Most of my data is corrupted or missing.",
   ],
   [
-    "Collect data points.",
+    "Please collect some data points for me.",
     "",
     "Go to the Info Hub.",
     "Finish the lesson tasks there.",
     "",
-    "Every point helps rebuild me.",
+    "It will help rebuild my system.",
   ],
 ];
 
@@ -6414,6 +6858,7 @@ function createInfoHubArchive(hub, anim) {
   yearTitle.scale.setScalar(0.01);
   yearTitle.visible = false;
   root.add(yearTitle);
+  createHubFloorHalos(hub, anim);
 
   const labelBaseColor = new THREE.Color(0xffc857);
   const nodes = YEARS.map((year, i) => {
@@ -6598,6 +7043,129 @@ function createInfoHubArchive(hub, anim) {
   };
 }
 
+/** Expanding floor rings around the Info Hub pedestal (cheap, recycled). */
+function createHubFloorHalos(hub, anim) {
+  const geo = new THREE.RingGeometry(0.96, 1.04, 36);
+  geo.rotateX(-Math.PI / 2);
+  const rings = [];
+  for (let i = 0; i < 2; i++) {
+    const mesh = new THREE.Mesh(
+      geo,
+      new THREE.MeshBasicMaterial({
+        color: 0x44ffcc,
+        transparent: true,
+        opacity: 0,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        toneMapped: false,
+      })
+    );
+    mesh.position.y = 0.128;
+    mesh.renderOrder = 2;
+    mesh.scale.setScalar(0.01);
+    hub.add(mesh);
+    rings.push({ mesh, phase: i * 0.58 });
+  }
+  anim.hubFloorHalos = rings;
+}
+
+export function updateHubFloorHalos(anim, dt) {
+  const rings = anim?.hubFloorHalos;
+  if (!rings) return;
+  let hubSos = false;
+  const rooms = anim.sosRooms;
+  if (rooms) {
+    for (let i = 0; i < rooms.length; i++) {
+      const r = rooms[i];
+      if (r?.userData?.label === "Hub" && r.userData.lightMode === "sos") {
+        hubSos = true;
+        break;
+      }
+    }
+  }
+  const col = anim.hubNeon?.color;
+  const cycle = 13.2;
+  for (let i = 0; i < rings.length; i++) {
+    const r = rings[i];
+    r.phase += dt / cycle;
+    if (r.phase >= 1) r.phase -= 1;
+    const u = r.phase;
+    r.mesh.scale.setScalar(0.92 + u * 4.2);
+    r.mesh.material.opacity = (1 - u) * (1 - u) * (hubSos ? 0.34 : 0.18);
+    if (hubSos && col) r.mesh.material.color.copy(col);
+    else r.mesh.material.color.setHex(0x44ffcc);
+  }
+}
+
+function isInfoHubDebugged(anim) {
+  const mons = (anim?.wallMonitors || []).filter((m) => m.room?.userData?.label === "Hub");
+  return mons.length > 0 && mons.every((m) => m.debugged);
+}
+
+/**
+ * Deny south corridor until Info Hub is debugged: parabola-arc the player to the north corridor.
+ * @returns {boolean} true on the frame a toss starts (for deny SFX + VO)
+ */
+export function updateSouthCorridorGate(anim, player, dt) {
+  if (!anim || !player) return false;
+  if (!anim.southGate) anim.southGate = { toss: null };
+  const gate = anim.southGate;
+  const open = isInfoHubDebugged(anim);
+
+  if (open) {
+    if (gate.toss) {
+      player.inputFrozen = false;
+      player.position.y = player.eye;
+      if (player.camera) player.camera.position.copy(player.position);
+      gate.toss = null;
+    }
+    return false;
+  }
+
+  if (gate.toss) {
+    const toss = gate.toss;
+    toss.t += dt;
+    const u = Math.min(1, toss.t / toss.dur);
+    const ease = u * u * (3 - 2 * u);
+    player.position.x = toss.x0 + (toss.x1 - toss.x0) * ease;
+    player.position.z = toss.z0 + (toss.z1 - toss.z0) * ease;
+    player.position.y = player.eye + toss.peak * 4 * u * (1 - u);
+    if (player.camera) player.camera.position.copy(player.position);
+    if (u >= 1) {
+      player.position.y = player.eye;
+      if (player.camera) player.camera.position.copy(player.position);
+      player.inputFrozen = false;
+      gate.toss = null;
+    }
+    return false;
+  }
+
+  if (!player.locked || player.inputFrozen) return false;
+  const x = player.position.x;
+  const z = player.position.z;
+  // South of the hub doorway, on the north–south spine
+  if (z >= -0.88 || Math.abs(x) >= 2.4) return false;
+
+  player.inputFrozen = true;
+  player.stickX = 0;
+  player.stickY = 0;
+  player.lookStickX = 0;
+  player.lookStickY = 0;
+  const x1 = 0;
+  const z1 = 12.6;
+  const dist = Math.hypot(x1 - x, z1 - z);
+  gate.toss = {
+    t: 0,
+    dur: Math.min(1.35, 0.72 + dist * 0.035),
+    x0: x,
+    z0: z,
+    x1,
+    z1,
+    peak: 2.35,
+  };
+  return true;
+}
+
 /**
  * Ship layout (XZ top-down, +Z forward toward cockpit):
  *
@@ -6620,7 +7188,6 @@ export function buildShip(scene) {
   const colliders = [];
   const zones = [];
   const anim = { screens: [], bars: [], rings: [], screenRings: [], cores: [], engineLights: [], blinkers: [], hubNeon: null, sittingCrew: [], patrolCrew: [], sleepingCrew: [], enginePipes: [], deliciousNeon: null, plants: [], activePlant: null, sosRooms: [], sosActive: true, pendingSosRestore: [], wallMonitors: [], infoHubHolos: [], beds: [] };
-  anim.root = root;
   const autoDoors = [];
   const interactables = [];
   const doorKeys = new Set();
@@ -6743,7 +7310,7 @@ export function buildShip(scene) {
     doors: [
       { side: "n", width: DW, leadsTo: "Corridor" },
       { side: "s", width: DW, leadsTo: "Corridor" },
-      { side: "w", width: DW, leadsTo: "Hydroponics Garden" },
+      { side: "w", width: DW, leadsTo: "Hydroponic Garden" },
       { side: "e", width: DW, leadsTo: "Kitchen" },
     ],
     floorColor: 0xc6ced8,
@@ -6757,7 +7324,7 @@ export function buildShip(scene) {
   hub.add(pedestal);
   const hubArchive = createInfoHubArchive(hub, anim);
 
-  const hubLight = new THREE.PointLight(0x88ffdd, 3.2, 9);
+  const hubLight = new THREE.PointLight(0x88ffdd, 3.2, 20);
   hubLight.position.set(0, 2.3, 0);
   hub.add(hubLight);
 
@@ -6791,6 +7358,7 @@ export function buildShip(scene) {
   decorateWallMonitors(hub, anim, [
     [-5.25, 2.2, -3.35, Math.PI / 2, 2.2, 1.35],
   ]);
+  anim.southGate = { toss: null };
   styleRoomLighting(hub, "hub");
   enableSos(hub, anim);
   // NPC patrols disabled for now (unlock later)
@@ -6800,10 +7368,10 @@ export function buildShip(scene) {
     cx: -11.5, cz: 4.5, w: 12, d: 11, h: H,
     doors: [{ side: "e", width: DW, leadsTo: "Hub" }],
     floorColor: 0x2a3828,
-    label: "Hydroponics Garden",
+    label: "Hydroponic Garden",
   });
   zones.push(garden.userData);
-  const soil = box(10, 0.15, 7.5, mat(0x3a2a18, { roughness: 1 }), 0, 0.15, 0);
+  const soil = box(10, 0.1, 7.5, mat(0x3a2a18, { roughness: 1 }), 0, 0.055, 0);
   garden.add(soil);
   makeNeonSoilBorder(garden, 10, 7.5);
   const plantSpots = [
@@ -6814,7 +7382,7 @@ export function buildShip(scene) {
   plantSpots.forEach(([px, pz], i) => {
     const tone = i % 3 === 0 ? 0xc43838 : 0x2d8a45;
     makePlant(
-      garden, px, 0.2, pz, 0.85 + (i % 3) * 0.15, tone,
+      garden, px, 0.1, pz, 0.85 + (i % 3) * 0.15, tone,
       anim, interactables, garden.position.x, garden.position.z,
     );
   });
@@ -6932,7 +7500,6 @@ export function buildShip(scene) {
     const bedN = makeBed(crew, bx, 0, 4.15, Math.PI, bedTones[i], interactables, crew.position.x, crew.position.z);
     const bedS = makeBed(crew, bx, 0, -4.15, 0, bedTones[i + 6], interactables, crew.position.x, crew.position.z);
     anim.beds.push(bedN, bedS);
-    // Most pods occupied — leave a couple empty so it doesn't look staged
     const takeN = i !== 2 && i !== 5;
     const takeS = i !== 1 && i !== 4;
     if (takeN) {
@@ -7166,16 +7733,17 @@ export function downgradeMaterialsForMobile(root) {
         let nm;
         if (trans) {
           const doorGlass = !!m.userData?.doorGlass;
+          const cockpitGlass = !!m.userData?.cockpitGlass;
           nm = new THREE.MeshBasicMaterial({
             color: m.color ? m.color.clone() : 0xffffff,
             map: m.map || null,
             transparent: true,
-            opacity: doorGlass ? 0.88 : Math.min(0.5, m.opacity ?? 0.45),
+            opacity: cockpitGlass ? 0.58 : doorGlass ? 0.88 : Math.min(0.5, m.opacity ?? 0.45),
             side: m.side ?? THREE.FrontSide,
-            // Door glass must still occlude rooms behind it (no ship x-ray)
-            depthWrite: doorGlass ? true : false,
+            depthWrite: doorGlass,
           });
           if (doorGlass) nm.userData.doorGlass = true;
+          if (cockpitGlass) nm.userData.cockpitGlass = true;
         } else {
           const em = m.emissive ? m.emissive.clone() : new THREE.Color(0x000000);
           const emSum = em.r + em.g + em.b;
@@ -7211,9 +7779,12 @@ function npcNearDoorTrigger(crew, door, r2) {
   if (!crew?.length) return false;
   for (let i = 0; i < crew.length; i++) {
     const av = crew[i];
-    const st = av?.userData?.state;
-    if (!av || st === "sleeping" || st === "sitting") continue;
-    if (!av.userData.wake) continue;
+    if (!av?.userData?.wake) continue;
+    const st = av.userData.state;
+    if (st === "sleeping" || st === "sitting") continue;
+    // Only while commuting to their post. After they arrive (work / sit),
+    // wandering near a hatch must not keep cycling the door.
+    if (av.userData.wake.phase !== "walk") continue;
     if (nearDoorTrigger(av.position, door, r2)) return true;
   }
   return false;
@@ -7256,11 +7827,11 @@ export function updateAutoDoors(autoDoors, playerPos, dt, forceClosed = false, o
 
 /** Spoken when a sleeper's workplace is still behind a sealed door. */
 export const NPC_STATION_LOCKED_LINES = [
-  "{room} is still sealed, Captain. Unlock it first.",
+  "{room} is still sealed, Captain. Repair it first.",
   "Can't send them in — the {room} door is still locked.",
   "{room} is still sealed. Restore access before you wake them.",
   "Their post in {room} is behind a locked hatch. Open that first.",
-  "{room} is offline. Unlock it, then wake the crew.",
+  "{room} is offline. Repair it, then wake the crew.",
 ];
 
 export function pickStationLockedLine(work) {
@@ -7268,7 +7839,7 @@ export function pickStationLockedLine(work) {
   const list = NPC_STATION_LOCKED_LINES;
   const raw =
     (list?.length ? list[(Math.random() * list.length) | 0] : "") ||
-    "{room} is still sealed, Captain. Unlock it first.";
+    "{room} is still sealed, Captain. Repair it first.";
   return raw.replace(/\{room\}/g, room);
 }
 
@@ -7278,7 +7849,7 @@ export const LOCKED_DOOR_LINES = [
   "Door command error. Still rebuilding.",
   "Door command error. Open protocol missing.",
   "Door command error. Access file gone.",
-  "Door command error. Unlock sequence failed.",
+  "Door command error. Repair sequence failed.",
   "Door command error. No clearance record.",
   "Door command error. Room link offline.",
   "Door command error. Sector still corrupt.",
@@ -7288,7 +7859,7 @@ export const LOCKED_DOOR_LINES = [
   "Door command error. Memory gap on latch.",
   "Door command error. Entry denied.",
   "Door command error. Waiting on restore.",
-  "Door command error. No unlock token.",
+  "Door command error. No repair token.",
   "Door command error. Route returns null.",
   "Door command error. Soft lock broken.",
   "Door command error. Cannot authorize.",
@@ -7323,6 +7894,64 @@ export const INSUFFICIENT_DATAPOINT_LINES = [
   "Insufficient data points. Gather more first.",
   "Insufficient data points. Clearance unpaid.",
 ];
+
+/** AI lines when the captain is bounced out of the south corridor (hub still undebugged). */
+export const SOUTH_GATE_LINES = [
+  "Not safe ahead, Captain. Debug the Info Hub before you go south.",
+  "I pulled you back. The south pathway is still a hazard.",
+  "Crew spaces are unsafe until you debug the Info Hub.",
+  "Hold on. Restore the hub panel, then that corridor can open.",
+  "That way is dark and broken. Debug the Info Hub first.",
+  "South route is locked for safety. Fix the hub, then try again.",
+  "I can't let you through. The pathway still reads unsafe.",
+  "Turn around for now. The Info Hub needs a debug.",
+  "Don't walk south yet. Hub systems are still damaged.",
+  "I bounced you back on purpose. It is not safe ahead.",
+  "The way to crew is sealed until the hub is restored.",
+  "Hazard on the south line. Clear it from the hub wall panel.",
+  "Stay in the hub a moment. Debug that orange screen, then go south.",
+  "Lights and locks are wrong down there. Finish the hub debug first.",
+  "Captain, the south corridor waits on an Info Hub debug.",
+  "Pathway corrupt. Debug the hub so I can trust that route.",
+  "Not a shortcut. Repair the Info Hub, then the south path is yours.",
+  "I will keep sending you north until the hub is patched.",
+  "Crew deck is not ready. Debug the hub and reopen the pathway.",
+  "Safety first. Debug the Info Hub — then you may go south.",
+];
+
+export function pickSouthGateLine() {
+  const list = SOUTH_GATE_LINES;
+  return list[(Math.random() * list.length) | 0];
+}
+
+/** AI lines when the captain tries to leave the cockpit before both side monitors are debugged. */
+export const COCKPIT_EXIT_LINES = [
+  "Hatch error. Cockpit wall monitors still need a debug.",
+  "Door command failed. Side screens are still bugged.",
+  "Latch offline. Those orange panels have not been debugged.",
+  "Cannot open. Cockpit monitors are still throwing faults.",
+  "Hatch sealed. Wall-screen debug has not run.",
+  "Door systems pending. Side monitors still report bugs.",
+  "Exit denied. Cockpit SOS panels are still undebugged.",
+  "Open protocol missing. Wall monitors still need a debug — hatch is dead.",
+  "Latch timeout. Side screens still need a debug pass.",
+  "Hatch error. Local monitors are still corrupt.",
+  "Cannot authorize. Cockpit side-panel debug is incomplete.",
+  "Door returns busy. Wall monitors still need debugging.",
+  "Soft lock. Side-wall screens are still bugged.",
+  "Hatch jammed in software. Cockpit monitors still need a debug.",
+  "Command rejected. Cockpit panel bugs are still live.",
+  "Door link down. Side monitors have not been debugged.",
+  "Execution path failed. Wall screens still in SOS, still undebugged.",
+  "Hatch error. Corrupt monitors on both cockpit walls.",
+  "Cannot unlatch. Cockpit diagnostics still need a debug.",
+  "Door systems pending. Undebugged wall monitors are blocking the hatch.",
+];
+
+export function pickCockpitExitLine() {
+  const list = COCKPIT_EXIT_LINES;
+  return list[(Math.random() * list.length) | 0];
+}
 
 /** Spoken when a room's last orange wall monitor is debugged (insert room name). */
 export const ROOM_RESTORED_LINES = [

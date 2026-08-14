@@ -1,8 +1,9 @@
 import * as THREE from "three";
-import { buildShip, createSpaceView, createStatusView, updateAutoDoors, updateStallDoors, nearestInteractable, nearestLockedDoor, LOCKED_DOOR_LINES, INSUFFICIENT_DATAPOINT_LINES, pickStationLockedLine, pickRoomRestoredLine, updateSosLights, updatePlants, updateSleepingCrew, updateAwakeCrew, updateSittingCrew, downgradeMaterialsForMobile, unlockShipDoor, relockAllShipDoors, clearShipBriefingProgress, debugWallMonitor, resetAllRoomSos, applyWallMonitorVisual, setWallMonitorSosBlend, toggleBedPod, setBedPodHover, isNpcWorkRoomLocked, bedFromHit, beginNpcWake, sleeperFromHit, resetSleepingCrew, pumpPendingSosRestore } from "./ship.js?v=20260815bz";
+import { buildShip, createSpaceView, createStatusView, updateAutoDoors, updateStallDoors, nearestInteractable, nearestLockedDoor, LOCKED_DOOR_LINES, INSUFFICIENT_DATAPOINT_LINES, pickStationLockedLine, pickRoomRestoredLine, pickSouthGateLine, pickCockpitExitLine, updateSosLights, updatePlants, updateSleepingCrew, updateAwakeCrew, updateSittingCrew, updateNpcChitchat, updateNpcWiggle, pokeWaitingNpc, waitingNpcFromHit, downgradeMaterialsForMobile, unlockShipDoor, relockAllShipDoors, clearShipBriefingProgress, debugWallMonitor, resetAllRoomSos, applyWallMonitorVisual, setWallMonitorSosBlend, updateWallMonitorSosPulse, toggleBedPod, setBedPodHover, isNpcWorkRoomLocked, bedFromHit, beginNpcWake, sleeperFromHit, resetSleepingCrew, pumpPendingSosRestore, updateHubFloorHalos, updateSouthCorridorGate } from "./ship.js?v=20260815dl";
+import { createSosCeilingSparks, updateSosCeilingSparks } from "./sos-sparks.js?v=20260815dk";
 import { Player } from "./player.js?v=20260815ai";
 import { isTouchDevice, setupMobileControls } from "./mobile.js";
-import { HudPrompt } from "./hud-prompt.js";
+import { HudPrompt } from "./hud-prompt.js?v=20260815cb";
 import {
   DOOR_UNLOCK_COST,
   MONITOR_DEBUG_COST,
@@ -15,9 +16,10 @@ import {
   markMonitorDebugged,
 } from "./datapoints.js?v=adastra1000";
 import { ShipScenes, SCENE } from "./scenes.js";
-import { shipVoice } from "./ai-voice.js";
+import { createScene1Intro, applyCockpitShake } from "./scene1-intro.js?v=20260815cx";
+import { shipVoice } from "./ai-voice.js?v=20260815cj";
 import { createAiDrone } from "./ai-drone.js";
-import { ShipAmbience, ProximityTransformerHum, InfoHubHoloHiss, playDoorOpen, playDoorClose, playDoorDenied, playDoorAuth, playCyberSuccess, playPodToggle, playHoloHover, resumeAudio, playYearReveal, playYearCollapse, playYearHover, playYearPick } from "../sfx/index.js?v=20260815bf";
+import { ShipAmbience, ProximityTransformerHum, InfoHubHoloHiss, SleeperLevitateHum, HubHaloHum, playDoorOpen, playDoorClose, playDoorAuth, playCyberSuccess, playPodToggle, playHoloHover, playElectricShock, playHullRumble, playGlassDenied, playCeilingSpark, resumeAudio, playYearReveal, playYearCollapse, playYearHover, playYearPick } from "../sfx/index.js?v=20260815di";
 
 const loaderEl = document.getElementById("loader");
 const loadBar = document.getElementById("load-bar");
@@ -112,6 +114,7 @@ function wait(ms) {
 
 function setMainScreenMode(ship, mode) {
   const ud = ship.mainScreen.userData;
+  if (ud.introPlaying) return;
   const next = mode === "outside" ? "outside" : "default";
   ud.mode = next;
   const mesh = ud.screenMesh;
@@ -193,6 +196,10 @@ async function boot() {
 
   setProgress(48, "Loading…");
   const ship = buildShip(scene);
+  const sosSparks = createSosCeilingSparks(ship.root);
+  sosSparks.onBurst = (dist) => {
+    playCeilingSpark(1 - Math.min(0.7, dist / 14));
+  };
   if (mobileQuality) {
     downgradeMaterialsForMobile(ship.root);
     if (ship.mainScreen?.userData?.screenMesh) {
@@ -208,6 +215,7 @@ async function boot() {
   const screenH = ship.mainScreen.userData.height || 2.6;
   const spaceView = createSpaceView(renderer, screenW / screenH);
   const statusView = createStatusView(screenW / screenH);
+  const scene1Intro = createScene1Intro();
   ship.mainScreen.userData.outsideMat = spaceView.material;
   ship.mainScreen.userData.statusMat = statusView.material;
   ship.mainScreen.userData.statusView = statusView;
@@ -269,10 +277,16 @@ async function boot() {
   let skipDeltas = 2;
 
   const hudPrompt = new HudPrompt(promptEl, { touchMode });
+  shipVoice.onLine = (text) => {
+    hudPrompt.setSubtitle(text);
+    hudPrompt.refresh();
+  };
   const scenes = new ShipScenes({ player });
   const ambience = new ShipAmbience();
   const boxHum = new ProximityTransformerHum();
   const hubHoloHiss = new InfoHubHoloHiss();
+  const sleeperHoverHum = new SleeperLevitateHum();
+  const hubHaloHum = new HubHaloHum();
   const aiDrone = createAiDrone(camera, { touchMode });
 
   function roomAtPlayer() {
@@ -288,6 +302,19 @@ async function boot() {
     return null;
   }
 
+  function startScene1Briefing() {
+    const ud = ship.mainScreen.userData;
+    ud.introPlaying = false;
+    ud.mode = "default";
+    ud.screenMesh.material = ud.statusMat || ud.defaultMat;
+    ud.deco.visible = false;
+    if (ud.statusView?.needsAlertStart?.()) {
+      ud.statusView.beginBriefing();
+      hudPrompt.clearDialogue("ai-brief");
+      hudPrompt.refresh();
+    }
+  }
+
   function beginScene1() {
     // Snap to cockpit corner facing the main screen (not door-center)
     player.position.copy(ship.spawn);
@@ -300,24 +327,43 @@ async function boot() {
     player.update(0);
     scenes.start(SCENE.COCKPIT_BRIEFING);
     const ud = ship.mainScreen.userData;
-    ud.mode = "default";
-    ud.screenMesh.material = ud.statusMat || ud.defaultMat;
     ud.deco.visible = false;
-    // Scene 1 starts automatically — no need to walk up to the desk
+    scene1Intro.stop();
     if (ud.statusView?.needsAlertStart?.()) {
-      ud.statusView.beginBriefing();
-      hudPrompt.clearDialogue("ai-brief");
-      hudPrompt.refresh();
+      ud.introPlaying = true;
+      ud.mode = "intro";
+      ud.screenMesh.material = scene1Intro.material;
+      scene1Intro.play(() => startScene1Briefing());
+    } else {
+      ud.introPlaying = false;
+      ud.mode = "default";
+      ud.screenMesh.material = ud.statusMat || ud.defaultMat;
     }
   }
 
-  function syncScene1FromBriefing() {
-    const status = ship.mainScreen.userData.statusView;
+  function briefingScriptDone() {
+    return !!ship.mainScreen.userData.statusView?.complete;
+  }
+
+  function isCockpitWallMonitor(wm) {
+    return wm?.room?.userData?.label === "Cockpit";
+  }
+
+  function cockpitSideMonitorsDebugged() {
+    const mons = (ship.anim?.wallMonitors || []).filter(isCockpitWallMonitor);
+    return mons.length > 0 && mons.every((m) => m.debugged);
+  }
+
+  function maybeReleaseCockpitScene() {
     if (!scenes.isActive(SCENE.COCKPIT_BRIEFING)) return;
-    if (status?.complete) {
-      scenes.end(SCENE.COCKPIT_BRIEFING);
-      player.setLookLimits(null);
-    }
+    if (!briefingScriptDone()) return;
+    if (!cockpitSideMonitorsDebugged()) return;
+    scenes.end(SCENE.COCKPIT_BRIEFING);
+    player.setLookLimits(null);
+  }
+
+  function syncScene1FromBriefing() {
+    maybeReleaseCockpitScene();
   }
 
   function nearMainScreen() {
@@ -347,6 +393,8 @@ async function boot() {
   /** Sticky AI line while standing at a sealed door (reroll when leaving / switching doors). */
   let lockedDoorKey = null;
   let lockedDoorLine = null;
+  let cockpitExitKey = null;
+  let cockpitExitLine = null;
   let collectedDatapoints = 0;
   let hoveredUnlockDoor = null;
   let hoveredDeskOption = null;
@@ -354,6 +402,8 @@ async function boot() {
   let unlockVaporFx = null;
   /** @type {{ door: object, holo: object, t: number, dur: number } | null} */
   let unlockDenyFx = null;
+  /** @type {{ holo: object, t: number, dur: number } | null} */
+  let denyFlashFx = null;
   /** @type {object | null} */
   let hoveredDebugMonitor = null;
   /** @type {object | null} */
@@ -366,6 +416,11 @@ async function boot() {
   let wasHubNear = false;
   /** @type {object | null} */
   let lastAimedYear = null;
+  let shockShakeT = 0;
+  const SHOCK_SHAKE_DUR = 1.15;
+  let sosRumbleT = 0;
+  let sosRumbleWait = 1.1;
+  const SOS_RUMBLE_DUR = 1.15;
 
   /** Crosshair centre (desktop) or tap point (mobile) → year pick + flash transit. */
   let yearTransit = null;
@@ -373,6 +428,7 @@ async function boot() {
     const hub = ship.hubBeacon;
     if (!hub?.pickYearByRay || !player.locked) return false;
     if (yearTransit || hub.getPickedYear?.()) return true;
+    if (ship.anim?.southGate?.toss) return false;
     if ((hub.expand || 0) < 0.45) return false;
     if (clientX == null || clientY == null) {
       yearNdc.set(0, 0);
@@ -423,6 +479,7 @@ async function boot() {
   function tryStartBriefingByProximity() {
     // Kept as a safety net; Scene 1 now auto-starts on enter.
     const ud = ship.mainScreen.userData;
+    if (ud.introPlaying) return false;
     if (ud.mode !== "default" || !ud.statusView?.needsAlertStart?.()) return false;
     ud.statusView.beginBriefing();
     hudPrompt.clearDialogue("ai-brief");
@@ -444,6 +501,7 @@ async function boot() {
   function closeShipDialog(id) {
     const el = document.getElementById(id);
     if (el) el.remove();
+    syncConfirmCursor();
   }
 
   function anyShipDialogOpen() {
@@ -453,6 +511,31 @@ async function boot() {
       document.getElementById("debug-confirm") ||
       document.getElementById("npc-confirm")
     );
+  }
+
+  /** OS cannot warp the mouse; fake the pointer at the crosshair for Yes/No dialogs. */
+  let confirmCursorEl = null;
+  function syncConfirmCursor() {
+    if (touchMode || !anyShipDialogOpen()) {
+      document.body.classList.remove("confirm-cursor");
+      if (confirmCursorEl) confirmCursorEl.hidden = true;
+      return;
+    }
+    document.body.classList.add("confirm-cursor");
+    if (!confirmCursorEl) {
+      confirmCursorEl = document.createElement("div");
+      confirmCursorEl.id = "confirm-cursor";
+      confirmCursorEl.setAttribute("aria-hidden", "true");
+      document.body.appendChild(confirmCursorEl);
+      window.addEventListener("pointermove", (e) => {
+        if (!confirmCursorEl || confirmCursorEl.hidden) return;
+        confirmCursorEl.style.left = e.clientX + "px";
+        confirmCursorEl.style.top = e.clientY + "px";
+      });
+    }
+    confirmCursorEl.style.left = innerWidth * 0.5 + "px";
+    confirmCursorEl.style.top = innerHeight * 0.5 + "px";
+    confirmCursorEl.hidden = false;
   }
 
   function closeUnlockConfirm() {
@@ -488,7 +571,7 @@ async function boot() {
       '<div class="ship-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="unlock-confirm-title">' +
       '<p id="unlock-confirm-title">Do you want to spend <strong>' +
       DOOR_UNLOCK_COST +
-      " data</strong> to unlock this?</p>" +
+      " data</strong> to repair this?</p>" +
       '<div class="ship-confirm-actions">' +
       '<button type="button" class="ship-confirm-yes" id="unlock-confirm-yes">Yes</button>' +
       '<button type="button" class="ship-confirm-no" id="unlock-confirm-no">No</button>' +
@@ -497,6 +580,7 @@ async function boot() {
       if (e.target === wrap) closeUnlockConfirm();
     });
     document.body.appendChild(wrap);
+    syncConfirmCursor();
     document.getElementById("unlock-confirm-no")?.addEventListener("click", () => {
       closeUnlockConfirm();
       if (!touchMode) {
@@ -543,6 +627,7 @@ async function boot() {
       if (e.target === wrap) closeResetConfirm();
     });
     document.body.appendChild(wrap);
+    syncConfirmCursor();
     document.getElementById("reset-confirm-no")?.addEventListener("click", () => {
       closeResetConfirm();
       if (!touchMode) {
@@ -571,6 +656,8 @@ async function boot() {
     hoveredDeskOption = null;
     lockedDoorKey = null;
     lockedDoorLine = null;
+    scene1Intro.stop();
+    ship.mainScreen.userData.introPlaying = false;
     // Ship usage only — collected exercise datapoints stay on the server / scores API
     clearShipDatapointUsage();
     clearShipBriefingProgress();
@@ -619,7 +706,7 @@ async function boot() {
 
   /** Insufficient balance: VO line + rapid red glitch on unlock text. */
   function denyInsufficientUnlock(door) {
-    playDoorDenied();
+    playGlassDenied();
     shipVoice.trySpeak(pickInsufficientLine());
     const holo = door?.unlockHolo;
     if (!holo?.material || unlockVaporFx) return;
@@ -666,6 +753,39 @@ async function boot() {
     }
   }
 
+  function flashCockpitAccessDenied() {
+    const door = (ship.autoDoors || []).find((d) => d.denyHolo);
+    const h = door?.denyHolo;
+    if (!h?.material) return;
+    denyFlashFx = { holo: h, t: 0, dur: 1.85 };
+    h.visible = true;
+    h.material.opacity = 1;
+  }
+
+  function updateDenyFlash(dt) {
+    if (!denyFlashFx) return;
+    const fx = denyFlashFx;
+    fx.t += dt;
+    const h = fx.holo;
+    if (!h?.material) {
+      denyFlashFx = null;
+      return;
+    }
+    const u = Math.min(1, fx.t / fx.dur);
+    let op = 0;
+    if (u < 0.08) op = 1;
+    else if (u < 0.14) op = 0;
+    else if (u < 0.72) op = 1;
+    else op = Math.max(0, 1 - (u - 0.72) / 0.28);
+    h.visible = op > 0.05;
+    h.material.opacity = op;
+    if (fx.t >= fx.dur) {
+      h.visible = false;
+      h.material.opacity = h.userData.baseOpacity ?? 0.95;
+      denyFlashFx = null;
+    }
+  }
+
   function beginUnlockWithVapor(door) {
     if (!door?.locked || unlockVaporFx) return;
     const used = getSpentDatapoints();
@@ -705,7 +825,7 @@ async function boot() {
     lockedDoorKey = null;
     lockedDoorLine = null;
     if (hoveredUnlockDoor === door) hoveredUnlockDoor = null;
-    shipVoice.trySpeak("Door unlock authorized. Data points spent.");
+    shipVoice.trySpeak("Door repair authorized. Data points spent.");
   }
 
   function updateUnlockVapor(dt) {
@@ -894,11 +1014,12 @@ async function boot() {
   function tryDebugWallMonitor(wm) {
     if (!wm || wm.debugged || wm.repairing) return false;
     if (wm.room?.userData?.lightMode !== "sos") return false;
+    if (isCockpitWallMonitor(wm) && !briefingScriptDone()) return false;
     if (debugTweenFx) return false;
     const used = getSpentDatapoints();
     const avail = availableDatapoints(collectedDatapoints, used);
     if (avail < MONITOR_DEBUG_COST) {
-      playDoorDenied();
+      playGlassDenied();
       shipVoice.trySpeak(pickInsufficientLine());
       return true;
     }
@@ -933,6 +1054,7 @@ async function boot() {
       if (e.target === wrap) closeDebugConfirm();
     });
     document.body.appendChild(wrap);
+    syncConfirmCursor();
     document.getElementById("debug-confirm-no")?.addEventListener("click", () => {
       closeDebugConfirm();
       if (!touchMode) {
@@ -955,138 +1077,12 @@ async function boot() {
     } catch (_) {}
   }
 
-  function pickBedOrSleeper(clientX, clientY) {
-    if (clientX == null || clientY == null) {
-      unlockNdc.set(0, 0);
-    } else {
-      const rect = renderer.domElement.getBoundingClientRect();
-      unlockNdc.set(
-        ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
-        -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1
-      );
-    }
-    unlockRaycaster.setFromCamera(unlockNdc, camera);
-    unlockRaycaster.far = 4.8;
-    const sleepers = (ship.anim?.sleepingCrew || []).filter(
-      (av) => av.userData.state === "sleeping"
-    );
-    if (sleepers.length) {
-      const hits = unlockRaycaster.intersectObjects(sleepers, true);
-      if (hits.length && hits[0].distance <= 4.8) {
-        const av = sleeperFromHit(hits[0].object, ship.anim.sleepingCrew);
-        if (av && av.userData.state === "sleeping") {
-          const bed = av.userData.bed;
-          if (bed && !bed.userData.podClosed) {
-            unlockRaycaster.far = Infinity;
-            return { sleeper: av, bed };
-          }
-        }
-      }
-    }
-    const beds = ship.anim?.beds || [];
-    if (beds.length) {
-      const hits = unlockRaycaster.intersectObjects(beds, true);
-      if (hits.length && hits[0].distance <= 4.8) {
-        const bed = bedFromHit(hits[0].object);
-        if (bed) {
-          unlockRaycaster.far = Infinity;
-          return { sleeper: null, bed };
-        }
-      }
-    }
-    unlockRaycaster.far = Infinity;
-    return null;
-  }
-
-  function tryActivateNpc(av) {
-    if (!av || av.userData.state !== "sleeping") return false;
-    if (anyShipDialogOpen()) return false;
-    if (isNpcWorkRoomLocked(av.userData.npcWork, ship.autoDoors)) {
-      playDoorDenied();
-      shipVoice.trySpeak(pickStationLockedLine(av.userData.npcWork));
-      return true;
-    }
-    const used = getSpentDatapoints();
-    const avail = availableDatapoints(collectedDatapoints, used);
-    if (avail < NPC_ACTIVATE_COST) {
-      playDoorDenied();
-      shipVoice.trySpeak(pickInsufficientLine());
-      return true;
-    }
-    showNpcConfirm(av);
-    return true;
-  }
-
-  function showNpcConfirm(av) {
-    if (!av || av.userData.state !== "sleeping") return;
-    closeUnlockConfirm();
-    closeResetConfirm();
-    closeDebugConfirm();
-    closeNpcConfirm();
-    try {
-      if (document.pointerLockElement) document.exitPointerLock();
-    } catch (_) {}
-
-    const name = av.userData.npcName || "this crewmate";
-    const wrap = document.createElement("div");
-    wrap.id = "npc-confirm";
-    wrap.className = "ship-confirm";
-    wrap.innerHTML =
-      '<div class="ship-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="npc-confirm-title">' +
-      '<p id="npc-confirm-title">Activate <strong>' +
-      name +
-      "</strong> with <strong>" +
-      NPC_ACTIVATE_COST +
-      " data points</strong>?</p>" +
-      '<div class="ship-confirm-actions">' +
-      '<button type="button" class="ship-confirm-yes" id="npc-confirm-yes">Yes</button>' +
-      '<button type="button" class="ship-confirm-no" id="npc-confirm-no">No</button>' +
-      "</div></div>";
-    wrap.addEventListener("click", (e) => {
-      if (e.target === wrap) closeNpcConfirm();
-    });
-    document.body.appendChild(wrap);
-    document.getElementById("npc-confirm-no")?.addEventListener("click", () => {
-      closeNpcConfirm();
-      if (!touchMode) {
-        try {
-          renderer.domElement.requestPointerLock();
-        } catch (_) {}
-      }
-    });
-    document.getElementById("npc-confirm-yes")?.addEventListener("click", () => {
-      closeNpcConfirm();
-      const used = getSpentDatapoints();
-      const avail = availableDatapoints(collectedDatapoints, used);
-      if (avail < NPC_ACTIVATE_COST) {
-        playDoorDenied();
-        shipVoice.trySpeak(pickInsufficientLine());
-      } else if (isNpcWorkRoomLocked(av.userData.npcWork, ship.autoDoors)) {
-        playDoorDenied();
-        shipVoice.trySpeak(pickStationLockedLine(av.userData.npcWork));
-      } else {
-        addSpentDatapoints(NPC_ACTIVATE_COST);
-        syncConsoleDatapoints();
-        beginNpcWake(av, ship.root);
-        playCyberSuccess();
-      }
-      if (!touchMode) {
-        try {
-          renderer.domElement.requestPointerLock();
-        } catch (_) {}
-      }
-    });
-    try {
-      document.getElementById("npc-confirm-yes")?.focus();
-    } catch (_) {}
-  }
-
   function beginDebugRepair(wm) {
     if (!wm || wm.debugged || wm.repairing || debugTweenFx) return;
     const used = getSpentDatapoints();
     const avail = availableDatapoints(collectedDatapoints, used);
     if (avail < MONITOR_DEBUG_COST) {
-      playDoorDenied();
+      playGlassDenied();
       shipVoice.trySpeak(pickInsufficientLine());
       return;
     }
@@ -1169,6 +1165,7 @@ async function boot() {
     } else {
       shipVoice.trySpeak("Monitor debug accepted. Panel restored to nominal.");
     }
+    maybeReleaseCockpitScene();
   }
 
   function clearDebugTween() {
@@ -1190,6 +1187,7 @@ async function boot() {
     for (const wm of ship.anim?.wallMonitors || []) {
       const h = wm.debugHolo;
       if (h?.visible && !wm.debugged && !wm.repairing && wm.room?.userData?.lightMode === "sos") {
+        if (isCockpitWallMonitor(wm) && !briefingScriptDone()) continue;
         out.push(h);
       }
     }
@@ -1257,6 +1255,158 @@ async function boot() {
     }
   }
 
+  function pickBedOrSleeper(clientX, clientY) {
+    if (clientX == null || clientY == null) {
+      unlockNdc.set(0, 0);
+    } else {
+      const rect = renderer.domElement.getBoundingClientRect();
+      unlockNdc.set(
+        ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
+        -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1
+      );
+    }
+    unlockRaycaster.setFromCamera(unlockNdc, camera);
+    unlockRaycaster.far = 4.8;
+    const sleepers = (ship.anim?.sleepingCrew || []).filter(
+      (av) => av.userData.state === "sleeping"
+    );
+    if (sleepers.length) {
+      const hits = unlockRaycaster.intersectObjects(sleepers, true);
+      if (hits.length && hits[0].distance <= 4.8) {
+        const av = sleeperFromHit(hits[0].object, ship.anim.sleepingCrew);
+        if (av && av.userData.state === "sleeping") {
+          const bed = av.userData.bed;
+          if (bed && !bed.userData.podClosed) {
+            unlockRaycaster.far = Infinity;
+            return { sleeper: av, bed };
+          }
+        }
+      }
+    }
+    const beds = ship.anim?.beds || [];
+    if (beds.length) {
+      const hits = unlockRaycaster.intersectObjects(beds, true);
+      if (hits.length && hits[0].distance <= 4.8) {
+        const bed = bedFromHit(hits[0].object);
+        if (bed) {
+          unlockRaycaster.far = Infinity;
+          return { sleeper: null, bed };
+        }
+      }
+    }
+    unlockRaycaster.far = Infinity;
+    return null;
+  }
+
+  function pickWaitingNpc(clientX, clientY) {
+    const crew = ship.anim?.sleepingCrew || [];
+    if (!crew.length) return null;
+    if (clientX == null || clientY == null) {
+      unlockNdc.set(0, 0);
+    } else {
+      const rect = renderer.domElement.getBoundingClientRect();
+      unlockNdc.set(
+        ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
+        -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1
+      );
+    }
+    unlockRaycaster.setFromCamera(unlockNdc, camera);
+    unlockRaycaster.far = 3.2;
+    const waiters = crew.filter((av) => av.userData.state !== "sleeping");
+    if (!waiters.length) {
+      unlockRaycaster.far = Infinity;
+      return null;
+    }
+    const hits = unlockRaycaster.intersectObjects(waiters, true);
+    unlockRaycaster.far = Infinity;
+    if (!hits.length || hits[0].distance > 3.2) return null;
+    return waitingNpcFromHit(hits[0].object, crew);
+  }
+
+  function tryActivateNpc(av) {
+    if (!av || av.userData.state !== "sleeping") return false;
+    if (anyShipDialogOpen()) return false;
+    if (isNpcWorkRoomLocked(av.userData.npcWork, ship.autoDoors)) {
+      playGlassDenied();
+      shipVoice.trySpeak(pickStationLockedLine(av.userData.npcWork));
+      return true;
+    }
+    const used = getSpentDatapoints();
+    const avail = availableDatapoints(collectedDatapoints, used);
+    if (avail < NPC_ACTIVATE_COST) {
+      playGlassDenied();
+      shipVoice.trySpeak(pickInsufficientLine());
+      return true;
+    }
+    showNpcConfirm(av);
+    return true;
+  }
+
+  function showNpcConfirm(av) {
+    if (!av || av.userData.state !== "sleeping") return;
+    closeUnlockConfirm();
+    closeResetConfirm();
+    closeDebugConfirm();
+    closeNpcConfirm();
+    try {
+      if (document.pointerLockElement) document.exitPointerLock();
+    } catch (_) {}
+
+    const name = av.userData.npcName || "this crewmate";
+    const wrap = document.createElement("div");
+    wrap.id = "npc-confirm";
+    wrap.className = "ship-confirm";
+    wrap.innerHTML =
+      '<div class="ship-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="npc-confirm-title">' +
+      '<p id="npc-confirm-title">Activate <strong>' +
+      name +
+      "</strong> with <strong>" +
+      NPC_ACTIVATE_COST +
+      " data points</strong>?</p>" +
+      '<div class="ship-confirm-actions">' +
+      '<button type="button" class="ship-confirm-yes" id="npc-confirm-yes">Yes</button>' +
+      '<button type="button" class="ship-confirm-no" id="npc-confirm-no">No</button>' +
+      "</div></div>";
+    wrap.addEventListener("click", (e) => {
+      if (e.target === wrap) closeNpcConfirm();
+    });
+    document.body.appendChild(wrap);
+    syncConfirmCursor();
+    document.getElementById("npc-confirm-no")?.addEventListener("click", () => {
+      closeNpcConfirm();
+      if (!touchMode) {
+        try {
+          renderer.domElement.requestPointerLock();
+        } catch (_) {}
+      }
+    });
+    document.getElementById("npc-confirm-yes")?.addEventListener("click", () => {
+      closeNpcConfirm();
+      const used = getSpentDatapoints();
+      const avail = availableDatapoints(collectedDatapoints, used);
+      if (avail < NPC_ACTIVATE_COST) {
+        playGlassDenied();
+        shipVoice.trySpeak(pickInsufficientLine());
+      } else if (isNpcWorkRoomLocked(av.userData.npcWork, ship.autoDoors)) {
+        playGlassDenied();
+        shipVoice.trySpeak(pickStationLockedLine(av.userData.npcWork));
+      } else {
+        addSpentDatapoints(NPC_ACTIVATE_COST);
+        syncConsoleDatapoints();
+        beginNpcWake(av, ship.root);
+        playCyberSuccess();
+      }
+      if (!touchMode) {
+        try {
+          renderer.domElement.requestPointerLock();
+        } catch (_) {}
+      }
+    });
+    try {
+      document.getElementById("npc-confirm-yes")?.focus();
+    } catch (_) {}
+  }
+
   function setBedHover(bed) {
     if (anyShipDialogOpen()) return;
     if (hoveredBed && hoveredBed !== bed) setBedPodHover(hoveredBed, false);
@@ -1300,6 +1450,8 @@ async function boot() {
       ambience.start();
       void boxHum.ensure();
       void hubHoloHiss.ensure();
+      void sleeperHoverHum.ensure();
+      void hubHaloHum.ensure();
     });
     // Enter Ship → Scene 1 (cockpit lockdown until briefing completes)
     beginScene1();
@@ -1381,6 +1533,10 @@ async function boot() {
           tryActivateNpc(bunk.sleeper);
           return;
         }
+        const waiter = touchMode
+          ? pickWaitingNpc(e.clientX, e.clientY)
+          : pickWaitingNpc(null, null);
+        if (waiter && pokeWaitingNpc(waiter)) return;
         if (bunk?.bed) {
           playPodClick(toggleBedPod(bunk.bed));
           return;
@@ -1470,6 +1626,8 @@ async function boot() {
           tryActivateNpc(bunk.sleeper);
           return;
         }
+        const waiter = pickWaitingNpc(e.clientX, e.clientY);
+        if (waiter && pokeWaitingNpc(waiter)) return;
         if (bunk?.bed) {
           playPodClick(toggleBedPod(bunk.bed));
           return;
@@ -1606,7 +1764,6 @@ async function boot() {
       const h = wm.debugHolo;
       if (!h?.visible || !h.material || wm === hoveredDebugMonitor) continue;
       const base = h.userData.baseOpacity ?? 0.55;
-      // Soft pulse only — hard flicker made orange/blue look glitchy
       h.material.opacity = base + Math.sin(t * 1.6) * 0.04;
     }
     // Wall monitor colors are set on state change only (not every frame)
@@ -1650,6 +1807,37 @@ async function boot() {
     const t = clock.elapsedTime;
     frame += 1;
     player.update(dt);
+    if (updateSouthCorridorGate(ship.anim, player, dt)) {
+      playElectricShock();
+      shockShakeT = SHOCK_SHAKE_DUR;
+      const line = pickSouthGateLine();
+      setTimeout(() => shipVoice.trySpeak(line), 280);
+    }
+    scene1Intro.applyShake(camera, t);
+    if (shockShakeT > 0) {
+      shockShakeT = Math.max(0, shockShakeT - dt);
+      applyCockpitShake(camera, t, shockShakeT / SHOCK_SHAKE_DUR);
+    }
+    {
+      const wantRumble =
+        player.locked &&
+        !yearTransit &&
+        !cockpitSideMonitorsDebugged();
+      if (wantRumble && shockShakeT <= 0) {
+        sosRumbleWait -= dt;
+        if (sosRumbleWait <= 0 && sosRumbleT <= 0) {
+          sosRumbleT = SOS_RUMBLE_DUR;
+          sosRumbleWait = 2.2 + Math.random() * 2.4;
+          playHullRumble();
+        }
+      } else if (!wantRumble) {
+        sosRumbleWait = 1.1;
+      }
+      if (sosRumbleT > 0) {
+        sosRumbleT = Math.max(0, sosRumbleT - dt);
+        applyCockpitShake(camera, t, sosRumbleT / SOS_RUMBLE_DUR);
+      }
+    }
     scenes.update();
     syncScene1FromBriefing();
     updateYearTransit(dt);
@@ -1664,17 +1852,19 @@ async function boot() {
       });
     }
     {
+      const tossing = !!ship.anim?.southGate?.toss;
       const hubNear = nearHubBeacon();
       const hub = ship.hubBeacon;
-      hub?.update?.(dt, hubNear, t, camera);
-      if (player.locked && !yearTransit) {
+      hub?.update?.(dt, hubNear && !tossing, t, camera);
+      if (player.locked && !yearTransit && !tossing) {
         if (hubNear && !wasHubNear) playYearReveal();
         if (!hubNear && wasHubNear) playYearCollapse();
       }
-      wasHubNear = hubNear;
+      wasHubNear = tossing ? false : hubNear;
       // PC: look-aim highlight (skip while year exit is playing)
       if (
         !yearTransit &&
+        !tossing &&
         !mobileQuality &&
         hubNear &&
         player.locked &&
@@ -1688,10 +1878,18 @@ async function boot() {
           lastAimedYear = hit;
         }
         hub.setAimedYear(hit);
-      } else if (!yearTransit && (mobileQuality || !hubNear)) {
+      } else if (!yearTransit && !tossing && (mobileQuality || !hubNear)) {
         if (lastAimedYear) lastAimedYear = null;
         hub?.setAimedYear?.(null);
       }
+    }
+    updateHubFloorHalos(ship.anim, dt);
+    {
+      const hubPos = ship.hubBeacon?.position;
+      const hd = hubPos
+        ? Math.hypot(player.position.x - hubPos.x, player.position.z - hubPos.z)
+        : 99;
+      hubHaloHum.update(dt, player.locked ? hd : 99, t);
     }
     // Scene 1 / pre-enter: keep doors sealed (silent). Open-hole frames never get panels/SFX.
     const doorsSealed =
@@ -1740,6 +1938,7 @@ async function boot() {
     updateStallDoors(ship.interactables, dt);
     updateUnlockVapor(dt);
     updateUnlockDeny(dt);
+    updateDenyFlash(dt);
     updateDebugRepair(dt);
     updateDeskOptionsVisibility();
     {
@@ -1750,7 +1949,8 @@ async function boot() {
       const nearR2 = 5.5 * 5.5;
       let hubHoloDist = 99;
       for (const holo of ship.anim?.infoHubHolos || []) {
-        if (inHub) {
+        // Inside the hub, hide the north doorway label — keep the south-path INFO HUB readable
+        if (inHub && !holo.userData?.infoHubFromSouth) {
           holo.visible = false;
           continue;
         }
@@ -1780,7 +1980,8 @@ async function boot() {
         const canShow =
           !wm.debugged &&
           !wm.repairing &&
-          wm.room?.userData?.lightMode === "sos";
+          wm.room?.userData?.lightMode === "sos" &&
+          !(isCockpitWallMonitor(wm) && !briefingScriptDone());
         if (!canShow) {
           h.visible = false;
           continue;
@@ -1808,11 +2009,29 @@ async function boot() {
       );
       updateSosLights(ship.anim.sosRooms, t, ship.anim.hubNeon, hubStillSos);
     }
+    updateWallMonitorSosPulse(ship.anim, t);
+    updateSosCeilingSparks(sosSparks, dt, roomAtPlayer(), player.position, {
+      active: player.locked && !yearTransit,
+      mobile: mobileQuality,
+    });
+    pumpPendingSosRestore(ship.anim);
     updatePlants(ship.anim, t);
     updateSleepingCrew(ship.anim?.sleepingCrew, t, player.position, 22, dt);
-    pumpPendingSosRestore(ship.anim);
+    {
+      const crew = ship.anim?.sleepingCrew;
+      let hoverT = 0;
+      if (crew) {
+        for (let i = 0; i < crew.length; i++) {
+          const ht = crew[i]?.userData?.sleep?.hoverT || 0;
+          if (ht > hoverT) hoverT = ht;
+        }
+      }
+      sleeperHoverHum.update(dt, hoverT);
+    }
     updateAwakeCrew(ship.anim?.sleepingCrew, dt, t, ship.autoDoors, player.position);
     updateSittingCrew(ship.anim?.sleepingCrew, dt, t, player.position);
+    updateNpcChitchat(ship.anim?.sleepingCrew, dt, player.position);
+    updateNpcWiggle(ship.anim?.sleepingCrew, dt);
     // deco only when near animated areas; throttle harder on mobile
     const px = player.position.x;
     const pz = player.position.z;
@@ -1844,10 +2063,13 @@ async function boot() {
       const status = ud.statusView;
 
       // Safety net if Scene 1 briefing somehow never started
-      if (player.locked && status?.needsAlertStart?.()) tryStartBriefingByProximity();
+      if (player.locked && !ud.introPlaying && status?.needsAlertStart?.()) {
+        tryStartBriefingByProximity();
+      }
 
       const unfinished =
-        ud.mode === "default" && status?.hasUnfinishedDialogue?.();
+        ud.introPlaying ||
+        (ud.mode === "default" && status?.hasUnfinishedDialogue?.());
 
       // 1) Dialogue claims — briefing only (Info Hub has no HUD welcome)
       if (unfinished && near) {
@@ -1862,26 +2084,44 @@ async function boot() {
       let nearby = null;
       let nearbyTap = null;
       if (player.locked && !hudPrompt.hasDialogue) {
-        const sealed = nearestLockedDoor(ship.autoDoors, player.position);
-        if (sealed) {
-          if (sealed.key !== lockedDoorKey) {
-            lockedDoorKey = sealed.key;
-            lockedDoorLine =
-              LOCKED_DOOR_LINES[(Math.random() * LOCKED_DOOR_LINES.length) | 0];
-            playDoorDenied();
-            const line = lockedDoorLine;
-            setTimeout(() => shipVoice.trySpeak(line), 320);
+        const blockCockpitExit =
+          briefingScriptDone() &&
+          !cockpitSideMonitorsDebugged() &&
+          player.position.z < 18.4 &&
+          Math.abs(player.position.x) < 3.2;
+        if (blockCockpitExit) {
+          if (cockpitExitKey !== "exit") {
+            cockpitExitKey = "exit";
+            cockpitExitLine = pickCockpitExitLine();
+            playGlassDenied();
+            flashCockpitAccessDenied();
+            const line = cockpitExitLine;
+            setTimeout(() => shipVoice.trySpeak(line), 280);
           }
-          // Show the same VO line in the HUD (unlock is still via red door hologram)
-          nearby = lockedDoorLine;
+          nearby = cockpitExitLine;
         } else {
-          lockedDoorKey = null;
-          lockedDoorLine = null;
-          const stall = nearestInteractable(ship.interactables, player.position);
-          if (stall) {
-            const p = stall.prompt();
-            nearby = touchMode ? p.replace(/^Press E/, "Tap") : p;
-            nearbyTap = () => doInteract();
+          cockpitExitKey = null;
+          cockpitExitLine = null;
+          const sealed = nearestLockedDoor(ship.autoDoors, player.position);
+          if (sealed) {
+            if (sealed.key !== lockedDoorKey) {
+              lockedDoorKey = sealed.key;
+              lockedDoorLine =
+                LOCKED_DOOR_LINES[(Math.random() * LOCKED_DOOR_LINES.length) | 0];
+              playGlassDenied();
+              const line = lockedDoorLine;
+              setTimeout(() => shipVoice.trySpeak(line), 320);
+            }
+            nearby = lockedDoorLine;
+          } else {
+            lockedDoorKey = null;
+            lockedDoorLine = null;
+            const stall = nearestInteractable(ship.interactables, player.position);
+            if (stall) {
+              const p = stall.prompt();
+              nearby = touchMode ? p.replace(/^Press E/, "Tap") : p;
+              nearbyTap = () => doInteract();
+            }
           }
         }
       }

@@ -251,8 +251,11 @@ canvas {
   transform: translateX(-50%);
   font-family: "Sora", "IBM Plex Sans", system-ui, sans-serif;
   font-size: 0.78rem;
-  letter-spacing: 0.06em;
-  padding: 0.5rem 0.95rem;
+  letter-spacing: 0.04em;
+  line-height: 1.4;
+  max-width: min(38rem, 88vw);
+  text-align: center;
+  padding: 0.55rem 1.05rem;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.88);
   border: 1px solid rgba(40, 140, 255, 0.55);
@@ -549,6 +552,26 @@ canvas {
 
 .ship-confirm-no:hover {
   background: rgba(30, 40, 55, 0.22);
+}
+
+/* Fake pointer at screen centre (crosshair) — browsers cannot warp the real mouse */
+body.confirm-cursor,
+body.confirm-cursor * {
+  cursor: none !important;
+}
+
+#confirm-cursor {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  width: 16px;
+  height: 24px;
+  margin: 0;
+  transform: none;
+  pointer-events: none;
+  z-index: 80;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='24' viewBox='0 0 16 24'%3E%3Cpath fill='%23fff' stroke='%23111' stroke-width='1.15' stroke-linejoin='round' d='M1.2 1.2 L1.2 17.2 L5.1 13.4 L8.2 22.2 L11.1 21.1 L8.1 12.4 L14.2 12.4 Z'/%3E%3C/svg%3E") no-repeat;
+  background-size: 16px 24px;
 }
 
 /* Locked-door unlock confirm (data points spend) — legacy aliases */

@@ -107,7 +107,7 @@ export class InfoHubHoloHiss {
     hp.frequency.value = 900;
 
     const ng = ctx.createGain();
-    ng.gain.value = 0.7;
+    ng.gain.value = 1.15;
 
     // Soft mid buzz under the hiss
     const buzz = ctx.createOscillator();
@@ -117,7 +117,7 @@ export class InfoHubHoloHiss {
     buzzLp.type = "lowpass";
     buzzLp.frequency.value = 180;
     const bg = ctx.createGain();
-    bg.gain.value = 0.12;
+    bg.gain.value = 0.22;
 
     src.connect(hp);
     hp.connect(bp);
@@ -149,7 +149,7 @@ export class InfoHubHoloHiss {
     }
     this._level += (target - this._level) * Math.min(1, dt * 7);
     // Subtle peak
-    this._gain.gain.value = this._level * 0.032;
+    this._gain.gain.value = this._level * 0.12;
     if (this._bp && this._level > 0.02) {
       const t = this._level;
       this._bp.frequency.value = 2200 + t * 900 + Math.sin(performance.now() * 0.012) * 180;

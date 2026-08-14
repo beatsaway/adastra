@@ -4,6 +4,8 @@
  * (SpeechSynthesis has no Web Audio volume — boundaries are the simple sync).
  */
 
+import { playAlienTalk, stopAlienTalk } from "../sfx/alien-talk.js?v=20260815cd";
+
 function normalizeLine(text) {
   return String(text || "")
     .replace(/·/g, ",")
@@ -45,6 +47,21 @@ export class AiVoice {
     this._fbWords = [];
     this._fbIdx = 0;
     this._fbNext = 0;
+    /** Current spoken line (HUD subtitle). */
+    this.line = null;
+    /** @type {((text: string | null) => void) | null} */
+    this.onLine = null;
+    /** NPC id currently playing alien SFX, or null. */
+    this.npcId = null;
+    /** SFX fragment count for the speaking NPC (dots sync). */
+    this.npcPulse = 0;
+  }
+
+  _emitLine(text) {
+    this.line = text || null;
+    try {
+      this.onLine?.(this.line);
+    } catch (_) {}
   }
 
   async ensureCtx() {
@@ -85,8 +102,12 @@ export class AiVoice {
     this._queue.length = 0;
     this._busy = false;
     this.viz = 0;
+    this.npcId = null;
+    this.npcPulse = 0;
     this._boundaryOk = false;
     this._fbWords = [];
+    this._emitLine(null);
+    stopAlienTalk();
     try {
       if (typeof speechSynthesis !== "undefined") speechSynthesis.cancel();
     } catch (_) {}
@@ -101,7 +122,16 @@ export class AiVoice {
   speak(text) {
     const key = normalizeLine(text);
     if (!key) return;
-    this._queue.push(key);
+    this._queue.push({ text: key, npc: false });
+    void this._pump();
+  }
+
+  /** NPC subtitle + alien SFX. Never uses SpeechSynthesis. */
+  speakNpc(text, voice = "crew") {
+    const key = normalizeLine(text);
+    if (!key) return;
+    this.npcId = voice || "crew";
+    this._queue.push({ text: key, npc: true, voice: voice || "crew" });
     void this._pump();
   }
 
@@ -111,18 +141,48 @@ export class AiVoice {
     return true;
   }
 
+  trySpeakNpc(text, voice = "crew") {
+    if (this.speaking) return false;
+    this.speakNpc(text, voice);
+    return true;
+  }
+
   async _pump() {
     if (this._busy) return;
     this._busy = true;
     const gen = this._gen;
     while (this._queue.length && gen === this._gen) {
-      const key = this._queue.shift();
-      await this._speakOne(key, gen);
+      const item = this._queue.shift();
+      const key = item?.text || "";
+      if (!key) continue;
+      this._emitLine(key);
+      if (item.npc) await this._speakNpc(item, gen);
+      else await this._speakOne(key, gen);
     }
     if (gen === this._gen) {
       this._busy = false;
       this._fbWords = [];
+      this.npcId = null;
+      this.npcPulse = 0;
+      this._emitLine(null);
     }
+  }
+
+  _speakNpc(item, gen) {
+    if (gen !== this._gen) return Promise.resolve();
+    this._boundaryOk = true;
+    this.npcId = item.voice || "crew";
+    this.npcPulse = 0;
+    return playAlienTalk(item.text, {
+      voice: item.voice,
+      onPulse: () => {
+        if (gen !== this._gen) return;
+        this.viz = 1;
+        this.npcPulse += 1;
+      },
+    }).then(() => {
+      if (gen === this._gen) this.viz = 0;
+    });
   }
 
   _speakOne(text, gen) {

@@ -2,8 +2,9 @@
  * Bottom HUD prompt: unfinished dialogue always outranks nearby interaction hints.
  *
  * Priority:
- *  1. Dialogue module (active briefing) — owns the box until finished
- *  2. Nearby interactables (stalls, see outside / console) — only when free
+ *  1. Spoken subtitle (current VO line)
+ *  2. Dialogue module (active briefing) — owns the box until finished
+ *  3. Nearby interactables (stalls) — only when free
  *
  * On mobile, nearby prompts are tappable (no E key).
  */
@@ -28,6 +29,8 @@ export class HudPrompt {
     this._nearby = null;
     /** @type {(() => void) | null} */
     this._nearbyActivate = null;
+    /** @type {string | null} */
+    this._subtitle = null;
     this._renderedKey = "";
 
     el.addEventListener("click", (e) => {
@@ -41,6 +44,14 @@ export class HudPrompt {
         this._nearbyActivate();
       }
     });
+  }
+
+  /**
+   * Spoken VO subtitle — outranks nearby hints while a line is playing.
+   * @param {string | null} text
+   */
+  setSubtitle(text) {
+    this._subtitle = text || null;
   }
 
   /**
@@ -88,7 +99,9 @@ export class HudPrompt {
     let clickable = false;
     let dialogueOwns = false;
 
-    if (this._dialogue) {
+    if (this._subtitle) {
+      text = this._subtitle;
+    } else if (this._dialogue) {
       dialogueOwns = true;
       text = this._dialogue.text || null;
       clickable = !!this._dialogue.clickable && !!text;
@@ -97,7 +110,7 @@ export class HudPrompt {
       clickable = !!this._nearbyActivate;
     }
 
-    const key = `${dialogueOwns ? "d" : "n"}|${text || ""}|${clickable ? 1 : 0}`;
+    const key = `${this._subtitle ? "s" : dialogueOwns ? "d" : "n"}|${text || ""}|${clickable ? 1 : 0}`;
     if (key === this._renderedKey) return;
     this._renderedKey = key;
 
