@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { shipVoice } from "./ai-voice.js";
 import { playBriefStart } from "../sfx/brief.js";
-import { isDoorUnlocked as isDoorAlreadyUnlocked, markDoorUnlocked, DOOR_UNLOCK_COST, MONITOR_DEBUG_COST, isMonitorDebugged } from "./datapoints.js?v=adastra1000";
+import { isDoorUnlocked as isDoorAlreadyUnlocked, markDoorUnlocked, DOOR_UNLOCK_COST, MONITOR_DEBUG_COST, isMonitorDebugged, isNpcActivated, markNpcActivated } from "./datapoints.js?v=adastra1000";
 
 const WALL = 0xf7f8fa;
 const FLOOR = 0xcfd5de;
@@ -2621,23 +2621,28 @@ function seatCrewAtChair(room, x, z, rotY = 0, scale = 0.44) {
 
 /**
  * Inactive sleeper in a bunk — parented to the bed so rotY follows the pod.
- * No attention / patrol; barely breathes.
+ * No attention / patrol; barely breathes until activated.
  */
-function layCrewInBed(bed, scale = 0.38) {
-  const av = createCrewAvatar(scale);
+const CREW_ROSTER = [
+  { id: "nova", name: "Nova Chen", role: "helm officer", duty: "I'll take the cockpit helm.", work: "cockpit" },
+  { id: "rex", name: "Rex Vale", role: "comms specialist", duty: "I'll staff the bridge consoles.", work: "cockpit" },
+  { id: "mira", name: "Mira Sol", role: "archive keeper", duty: "I'll watch the Info Hub.", work: "hub" },
+  { id: "jun", name: "Jun Park", role: "botanist", duty: "I'll tend hydroponics.", work: "garden" },
+  { id: "tess", name: "Tess Orin", role: "chef", duty: "I'll get the diner running.", work: "kitchen" },
+  { id: "kai", name: "Kai Holt", role: "reactor tech", duty: "I'll report to the engine room.", work: "engine" },
+  { id: "lila", name: "Lila Voss", role: "hygiene officer", duty: "I'll take the washroom watch.", work: "washroom" },
+  { id: "aden", name: "Aden Ruiz", role: "deck medic", duty: "I'll stay on crew deck.", work: "crewDeck" },
+];
+
+function poseSleeperLie(av, scale) {
   const mattressTop = 0.56;
   const halfThick = 0.26 * scale;
-  // Head toward pillow (local -Z). +X pitch put heads at the foot — use -X.
   av.position.set(0, mattressTop + halfThick, -0.2);
-  av.rotation.x = -Math.PI / 2;
-  av.rotation.z = (Math.random() - 0.5) * 0.12;
-
-  const { head, leftArm, rightArm, leftLeg, rightLeg, faceScreen, body } = av.userData;
+  av.rotation.set(-Math.PI / 2, 0, (Math.random() - 0.5) * 0.12);
+  const { head, leftArm, rightArm, leftLeg, rightLeg, faceScreen } = av.userData;
   if (leftArm && rightArm) {
     leftArm.rotation.set(0.12, 0, 0.35);
     rightArm.rotation.set(0.08, 0, -0.32);
-    leftArm.position.y -= 0.02 * scale;
-    rightArm.position.y -= 0.02 * scale;
   }
   if (leftLeg && rightLeg) {
     leftLeg.rotation.set(0.06, 0, 0.04);
@@ -2649,14 +2654,179 @@ function layCrewInBed(bed, scale = 0.38) {
   if (faceScreen?.material) {
     faceScreen.material.emissiveIntensity = 0.12 + Math.random() * 0.08;
   }
+}
+
+function markSleeperMeshes(av) {
+  const id = av.userData.npcId;
+  av.traverse((o) => {
+    if (!o.isMesh) return;
+    o.userData.bedClick = false;
+    o.userData.sleeperHit = true;
+    o.userData.sleeperId = id;
+  });
+}
+
+function layCrewInBed(bed, spec, scale = 0.4) {
+  const av = createCrewAvatar(scale);
+  poseSleeperLie(av, scale);
   av.userData.state = "sleeping";
+  av.userData.npcId = spec.id;
+  av.userData.npcName = spec.name;
+  av.userData.npcRole = spec.role;
+  av.userData.npcDuty = spec.duty;
+  av.userData.npcWork = spec.work;
+  av.userData.sleepScale = scale;
   av.userData.sleep = {
     phase: Math.random() * Math.PI * 2,
     baseY: av.position.y,
-    body,
+    body: av.userData.body,
   };
+  av.userData.bed = bed;
+  bed.userData.sleeper = av;
   bed.add(av);
+  markSleeperMeshes(av);
   return av;
+}
+
+function workPathFor(work, aisle) {
+  const deck = { x: 0, z: -10.25 };
+  const south = { x: 0, z: -4.5 };
+  const hub = { x: 0, z: 4.5 };
+  const routes = {
+    cockpit: [deck, south, hub, { x: 0, z: 13.5 }, { x: 3.5, z: 19.1 }],
+    hub: [deck, south, { x: 2.4, z: 4.5 }],
+    garden: [deck, south, hub, { x: -8.4, z: 8.0 }],
+    kitchen: [deck, south, hub, { x: 10.6, z: 1.6 }],
+    engine: [deck, { x: 0, z: -16 }, { x: 5.4, z: -22 }],
+    washroom: [{ x: 12.8, z: -8.6 }],
+    crewDeck: [{ x: -3.6, z: -10.25 }],
+  };
+  return [aisle, ...(routes[work] || routes.crewDeck)];
+}
+
+function aisleWorldFromBed(bed) {
+  const local = new THREE.Vector3(0, 0, 1.15);
+  bed.localToWorld(local);
+  return { x: local.x, z: local.z };
+}
+
+function poseNpcStand(av, worldX, worldZ, yaw = 0) {
+  const scale = av.userData.sleepScale || 0.4;
+  av.position.set(worldX, scale, worldZ);
+  av.rotation.set(0, yaw, 0);
+  const { head, leftArm, rightArm, leftLeg, rightLeg, faceScreen } = av.userData;
+  if (head) head.rotation.set(0, 0, 0);
+  if (leftArm) leftArm.rotation.set(0, 0, 0);
+  if (rightArm) rightArm.rotation.set(0, 0, 0);
+  if (leftLeg) leftLeg.rotation.set(0, 0, 0);
+  if (rightLeg) rightLeg.rotation.set(0, 0, 0);
+  if (faceScreen?.material) faceScreen.material.emissiveIntensity = 0.85;
+  if (av.userData.body) av.userData.body.scale.y = 1;
+}
+
+function attachNpcToRoot(av, root) {
+  if (!av || !root || av.parent === root) return;
+  av.updateWorldMatrix(true, false);
+  const pos = new THREE.Vector3();
+  av.getWorldPosition(pos);
+  root.add(av);
+  av.position.copy(pos);
+}
+
+/** Wake a sleeper: stand + wave on the bunk, then talk, then walk to work. */
+export function beginNpcWake(av, root) {
+  if (!av || av.userData.state === "awake" || av.userData.state === "waking") return false;
+  const bed = av.userData.bed;
+  if (bed?.userData?.podClosed) toggleBedPod(bed);
+  attachNpcToRoot(av, root);
+  const wp = new THREE.Vector3();
+  av.getWorldPosition(wp);
+  const aisle = aisleWorldFromBed(bed);
+  const yaw = Math.atan2(aisle.x - wp.x, aisle.z - wp.z);
+  poseNpcStand(av, wp.x, wp.z, yaw);
+  av.userData.state = "waking";
+  av.userData.sleep = null;
+  av.userData.wake = {
+    phase: "wave",
+    t: 2.4,
+    path: workPathFor(av.userData.npcWork, aisle),
+    wp: 0,
+    phaseWalk: Math.random() * Math.PI * 2,
+    spoke: false,
+  };
+  try {
+    markNpcActivated(av.userData.npcId);
+  } catch (_) {}
+  return true;
+}
+
+function placeNpcAtWork(av, root) {
+  attachNpcToRoot(av, root);
+  const aisle = aisleWorldFromBed(av.userData.bed);
+  const path = workPathFor(av.userData.npcWork, aisle);
+  const last = path[path.length - 1];
+  poseNpcStand(av, last.x, last.z, 0);
+  av.userData.state = "awake";
+  av.userData.sleep = null;
+  av.userData.wake = {
+    phase: "work",
+    t: 1 + Math.random() * 2,
+    path,
+    wp: path.length,
+    phaseWalk: Math.random() * Math.PI * 2,
+    workHome: last,
+    workTarget: { x: last.x, z: last.z },
+    spoke: true,
+  };
+  const bed = av.userData.bed;
+  if (bed) {
+    bed.userData.podClosed = false;
+    if (bed.userData.pod) {
+      bed.userData.pod.visible = false;
+      bed.userData.pod.position.y = bed.userData.openY;
+    }
+  }
+}
+
+export function sleeperFromHit(obj, crew) {
+  let o = obj;
+  let id = null;
+  while (o) {
+    if (o.userData?.sleeperId) {
+      id = o.userData.sleeperId;
+      break;
+    }
+    if (o.userData?.npcId) {
+      id = o.userData.npcId;
+      break;
+    }
+    o = o.parent;
+  }
+  if (!id) return null;
+  return (crew || []).find((a) => a.userData.npcId === id) || null;
+}
+
+export function resetSleepingCrew(anim, root) {
+  if (!anim?.sleepingCrew) return;
+  for (const av of anim.sleepingCrew) {
+    const bed = av.userData.bed;
+    if (!bed) continue;
+    if (av.parent !== bed) bed.add(av);
+    poseSleeperLie(av, av.userData.sleepScale || 0.4);
+    av.userData.state = "sleeping";
+    av.userData.wake = null;
+    av.userData.sleep = {
+      phase: Math.random() * Math.PI * 2,
+      baseY: av.position.y,
+      body: av.userData.body,
+    };
+    markSleeperMeshes(av);
+    bed.userData.podClosed = true;
+    if (bed.userData.pod) {
+      bed.userData.pod.visible = true;
+      bed.userData.pod.position.y = bed.userData.closedY;
+    }
+  }
 }
 
 /** Soft idle breathe for sleeping bunk crew (very cheap). */
@@ -2677,6 +2847,134 @@ export function updateSleepingCrew(crew, t, playerPos = null, maxDist = 22) {
     av.position.y = s.baseY + breathe;
     if (s.body) {
       s.body.scale.y = 1 + breathe * 2.2;
+    }
+  }
+}
+
+const _wakeFwd = new THREE.Vector3();
+
+/** Stand / wave / walk / work for dehibernated bunk crew. */
+export function updateAwakeCrew(crew, dt, t) {
+  if (!crew?.length) return;
+  for (let i = 0; i < crew.length; i++) {
+    const av = crew[i];
+    const w = av.userData.wake;
+    if (!w) continue;
+    const { head, leftArm, rightArm, leftLeg, rightLeg } = av.userData;
+    const scale = av.userData.sleepScale || 0.4;
+
+    if (w.phase === "wave" || w.phase === "talk") {
+      w.t -= dt;
+      if (rightArm) {
+        rightArm.rotation.z = -0.2 - Math.abs(Math.sin(t * 9.5)) * 1.15;
+        rightArm.rotation.x = -0.35;
+      }
+      if (leftArm) {
+        leftArm.rotation.z = 0.18;
+        leftArm.rotation.x = 0.08;
+      }
+      if (head) head.rotation.y = Math.sin(t * 2.4) * 0.18;
+      av.position.y = scale + Math.sin(t * 6) * 0.012;
+      if (w.phase === "wave" && w.t <= 0 && !w.spoke) {
+        w.spoke = true;
+        w.phase = "talk";
+        w.t = 0.5;
+        const name = av.userData.npcName || "crew";
+        const role = av.userData.npcRole || "crew";
+        const duty = av.userData.npcDuty || "I'll get to work.";
+        shipVoice.speak("Thanks for dehibernating me, Captain.");
+        shipVoice.speak("I'm " + name + ", " + role + ". " + duty);
+      }
+      if (w.phase === "talk" && w.spoke && w.t <= 0 && !shipVoice.speaking) {
+        w.phase = "walk";
+        w.wp = 0;
+        if (rightArm) rightArm.rotation.set(0, 0, 0);
+        if (leftArm) leftArm.rotation.set(0, 0, 0);
+      }
+      continue;
+    }
+
+    if (w.phase === "walk") {
+      const target = w.path[w.wp];
+      if (!target) {
+        w.phase = "work";
+        w.workHome = w.path[w.path.length - 1] || { x: av.position.x, z: av.position.z };
+        w.workTarget = { ...w.workHome };
+        w.t = 0.8 + Math.random() * 1.6;
+        av.userData.state = "awake";
+        continue;
+      }
+      const dx = target.x - av.position.x;
+      const dz = target.z - av.position.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist < 0.22) {
+        w.wp += 1;
+        continue;
+      }
+      const step = Math.min(dist, 2.35 * dt);
+      const inv = 1 / dist;
+      av.position.x += dx * inv * step;
+      av.position.z += dz * inv * step;
+      const face = Math.atan2(dx, dz);
+      let dyaw = face - av.rotation.y;
+      while (dyaw > Math.PI) dyaw -= Math.PI * 2;
+      while (dyaw < -Math.PI) dyaw += Math.PI * 2;
+      av.rotation.y += dyaw * Math.min(1, 10 * dt);
+      w.phaseWalk += 8.2 * dt;
+      const swing = Math.sin(w.phaseWalk) * 0.48;
+      if (leftLeg) leftLeg.rotation.x = swing;
+      if (rightLeg) rightLeg.rotation.x = -swing;
+      if (leftArm) leftArm.rotation.x = -swing * 0.85;
+      if (rightArm) rightArm.rotation.x = swing * 0.85;
+      av.position.y = scale + Math.abs(Math.sin(w.phaseWalk)) * 0.025;
+      continue;
+    }
+
+    if (w.phase === "work") {
+      w.t -= dt;
+      if (w.t <= 0) {
+        w.t = 1.4 + Math.random() * 2.8;
+        const home = w.workHome || { x: av.position.x, z: av.position.z };
+        w.workTarget = {
+          x: home.x + (Math.random() - 0.5) * 2.4,
+          z: home.z + (Math.random() - 0.5) * 2.4,
+        };
+      }
+      const target = w.workTarget || w.workHome;
+      if (!target) continue;
+      const dx = target.x - av.position.x;
+      const dz = target.z - av.position.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist > 0.18) {
+        const step = Math.min(dist, 1.15 * dt);
+        const inv = 1 / dist;
+        av.position.x += dx * inv * step;
+        av.position.z += dz * inv * step;
+        const face = Math.atan2(dx, dz);
+        let dyaw = face - av.rotation.y;
+        while (dyaw > Math.PI) dyaw -= Math.PI * 2;
+        while (dyaw < -Math.PI) dyaw += Math.PI * 2;
+        av.rotation.y += dyaw * Math.min(1, 8 * dt);
+        w.phaseWalk += 6.4 * dt;
+        const swing = Math.sin(w.phaseWalk) * 0.32;
+        if (leftLeg) leftLeg.rotation.x = swing;
+        if (rightLeg) rightLeg.rotation.x = -swing;
+        if (leftArm) leftArm.rotation.x = -swing * 0.7;
+        if (rightArm) rightArm.rotation.x = swing * 0.7;
+        av.position.y = scale + Math.abs(Math.sin(w.phaseWalk)) * 0.016;
+      } else {
+        if (leftLeg) leftLeg.rotation.x *= Math.max(0, 1 - 8 * dt);
+        if (rightLeg) rightLeg.rotation.x *= Math.max(0, 1 - 8 * dt);
+        if (leftArm) {
+          leftArm.rotation.x *= Math.max(0, 1 - 7 * dt);
+          leftArm.rotation.z = Math.sin(t * 1.1 + i) * 0.05;
+        }
+        if (rightArm) {
+          rightArm.rotation.x *= Math.max(0, 1 - 7 * dt);
+          rightArm.rotation.z = -Math.sin(t * 1.05 + i) * 0.05;
+        }
+        av.position.y += (scale - av.position.y) * Math.min(1, 8 * dt);
+      }
     }
   }
 }
@@ -3482,39 +3780,45 @@ function makeBed(group, x, y, z, rotY = 0, tones = {}, interactables = null, roo
   pod.visible = true;
   g.add(pod);
 
-  if (interactables) {
-    const state = {
-      kind: "bedShield",
-      panel: pod,
-      openY,
-      closedY,
-      amount: 1,
-      target: 1,
-      position: new THREE.Vector3(roomOx + x, 0.9, roomOz + z),
-      radius: 2.15,
-      prompt() {
-        return this.target > 0.5
-          ? "Press E · Open sleep pod"
-          : "Press E · Close sleep pod";
-      },
-      toggle() {
-        // snap — no tween
-        if (this.target > 0.5) {
-          this.target = 0;
-          this.amount = 0;
-          this.panel.visible = false;
-          this.panel.position.y = this.openY;
-        } else {
-          this.target = 1;
-          this.amount = 1;
-          this.panel.visible = true;
-          this.panel.position.y = this.closedY;
-        }
-      },
-    };
-    interactables.push(state);
-  }
+  g.userData.bedRoot = true;
+  g.userData.pod = pod;
+  g.userData.openY = openY;
+  g.userData.closedY = closedY;
+  g.userData.podClosed = true;
+  g.traverse((o) => {
+    if (o.isMesh) o.userData.bedClick = true;
+  });
   return g;
+}
+
+export function toggleBedPod(bed) {
+  if (!bed?.userData?.pod) return false;
+  const closed = !!bed.userData.podClosed;
+  const pod = bed.userData.pod;
+  if (closed) {
+    bed.userData.podClosed = false;
+    pod.visible = false;
+    pod.position.y = bed.userData.openY;
+  } else {
+    // Don't slam shut on an awake crewmate still standing on the bunk
+    const sleeper = bed.userData.sleeper;
+    if (sleeper && sleeper.userData.state !== "sleeping" && sleeper.parent === bed) {
+      return false;
+    }
+    bed.userData.podClosed = true;
+    pod.visible = true;
+    pod.position.y = bed.userData.closedY;
+  }
+  return true;
+}
+
+export function bedFromHit(obj) {
+  let o = obj;
+  while (o) {
+    if (o.userData?.bedRoot) return o;
+    o = o.parent;
+  }
+  return null;
 }
 
 /** Low coffee table — one surface slab + two side support slabs (same material, flush to edges). */
@@ -4336,7 +4640,7 @@ export function updateStallDoors(interactables, dt) {
   const speed = 2.2;
   for (let i = 0; i < interactables.length; i++) {
     const d = interactables[i];
-    if (d.kind === "bedShield") continue; // snap toggle — no tween
+    if (d.kind === "bedShield") continue; // leftover — pods are click/tap now
     if (d.kind === "toiletLid") {
       d.amount += (d.target - d.amount) * Math.min(1, 3.8 * dt);
       if (d.amount < 0.001) d.amount = 0;
@@ -4376,6 +4680,7 @@ export function nearestInteractable(interactables, pos) {
   if (!interactables) return null;
   for (let i = 0; i < interactables.length; i++) {
     const it = interactables[i];
+    if (it.kind === "bedShield" || it.kind === "wallMonitor") continue;
     if (typeof it.active === "function" && !it.active()) continue;
     const dx = pos.x - it.position.x;
     const dz = pos.z - it.position.z;
@@ -5854,7 +6159,8 @@ export function buildShip(scene) {
 
   const colliders = [];
   const zones = [];
-  const anim = { screens: [], bars: [], rings: [], screenRings: [], cores: [], engineLights: [], blinkers: [], hubNeon: null, sittingCrew: [], patrolCrew: [], sleepingCrew: [], enginePipes: [], deliciousNeon: null, plants: [], activePlant: null, sosRooms: [], sosActive: true, wallMonitors: [], infoHubHolos: [] };
+  const anim = { screens: [], bars: [], rings: [], screenRings: [], cores: [], engineLights: [], blinkers: [], hubNeon: null, sittingCrew: [], patrolCrew: [], sleepingCrew: [], enginePipes: [], deliciousNeon: null, plants: [], activePlant: null, sosRooms: [], sosActive: true, wallMonitors: [], infoHubHolos: [], beds: [] };
+  anim.root = root;
   const autoDoors = [];
   const interactables = [];
   const doorKeys = new Set();
@@ -6162,9 +6468,26 @@ export function buildShip(scene) {
     // bunks closer to the N/S walls
     const bedN = makeBed(crew, bx, 0, 4.15, Math.PI, bedTones[i], interactables, crew.position.x, crew.position.z);
     const bedS = makeBed(crew, bx, 0, -4.15, 0, bedTones[i + 6], interactables, crew.position.x, crew.position.z);
+    anim.beds.push(bedN, bedS);
     // Most pods occupied — leave a couple empty so it doesn't look staged
-    if (i !== 2 && i !== 5) anim.sleepingCrew.push(layCrewInBed(bedN));
-    if (i !== 1 && i !== 4) anim.sleepingCrew.push(layCrewInBed(bedS));
+    const takeN = i !== 2 && i !== 5;
+    const takeS = i !== 1 && i !== 4;
+    if (takeN) {
+      const spec = CREW_ROSTER[anim.sleepingCrew.length];
+      if (spec) {
+        const av = layCrewInBed(bedN, spec);
+        anim.sleepingCrew.push(av);
+        if (isNpcActivated(spec.id)) placeNpcAtWork(av, root);
+      }
+    }
+    if (takeS) {
+      const spec = CREW_ROSTER[anim.sleepingCrew.length];
+      if (spec) {
+        const av = layCrewInBed(bedS, spec);
+        anim.sleepingCrew.push(av);
+        if (isNpcActivated(spec.id)) placeNpcAtWork(av, root);
+      }
+    }
   });
   // bluish fake-data wall monitor on the far (west) end
   decorateWallMonitors(crew, anim, [

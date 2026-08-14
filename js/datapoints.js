@@ -6,6 +6,7 @@
 
 export const DOOR_UNLOCK_COST = 30;
 export const MONITOR_DEBUG_COST = 30;
+export const NPC_ACTIVATE_COST = 30;
 
 /** Demo starting balance (available before any spend). */
 export const DEMO_STARTING_DATAPOINTS = 1000;
@@ -13,6 +14,7 @@ export const DEMO_STARTING_DATAPOINTS = 1000;
 const SPENT_KEY = "adastra-ship-dp-spent";
 const UNLOCKED_KEY = "adastra-ship-unlocked-doors";
 const DEBUGGED_MONITORS_KEY = "adastra-ship-debugged-monitors";
+const ACTIVATED_NPC_KEY = "adastra-ship-activated-npcs";
 
 export function datapointsForPct(pct) {
   const p = Number(pct);
@@ -88,6 +90,29 @@ export function markMonitorDebugged(id) {
   } catch (_) {}
 }
 
+export function getActivatedNpcIds() {
+  try {
+    const raw = localStorage.getItem(ACTIVATED_NPC_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr.map(String) : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+export function isNpcActivated(id) {
+  return !!id && getActivatedNpcIds().includes(String(id));
+}
+
+export function markNpcActivated(id) {
+  if (!id) return;
+  const set = new Set(getActivatedNpcIds());
+  set.add(String(id));
+  try {
+    localStorage.setItem(ACTIVATED_NPC_KEY, JSON.stringify([...set]));
+  } catch (_) {}
+}
+
 /**
  * Ad Astra demo wallet: always start from DEMO_STARTING_DATAPOINTS.
  * Optional /api/scores can only raise the total further.
@@ -124,5 +149,6 @@ export function clearShipDatapointUsage() {
     localStorage.removeItem(SPENT_KEY);
     localStorage.removeItem(UNLOCKED_KEY);
     localStorage.removeItem(DEBUGGED_MONITORS_KEY);
+    localStorage.removeItem(ACTIVATED_NPC_KEY);
   } catch (_) {}
 }

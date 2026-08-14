@@ -1,11 +1,12 @@
 import * as THREE from "three";
-import { buildShip, createSpaceView, createStatusView, updateAutoDoors, updateStallDoors, nearestInteractable, nearestLockedDoor, LOCKED_DOOR_LINES, INSUFFICIENT_DATAPOINT_LINES, pickRoomRestoredLine, updateSosLights, updatePlants, updateSleepingCrew, downgradeMaterialsForMobile, unlockShipDoor, relockAllShipDoors, clearShipBriefingProgress, debugWallMonitor, resetAllRoomSos, applyWallMonitorVisual, setWallMonitorSosBlend } from "./ship.js?v=20260815bj";
+import { buildShip, createSpaceView, createStatusView, updateAutoDoors, updateStallDoors, nearestInteractable, nearestLockedDoor, LOCKED_DOOR_LINES, INSUFFICIENT_DATAPOINT_LINES, pickRoomRestoredLine, updateSosLights, updatePlants, updateSleepingCrew, updateAwakeCrew, downgradeMaterialsForMobile, unlockShipDoor, relockAllShipDoors, clearShipBriefingProgress, debugWallMonitor, resetAllRoomSos, applyWallMonitorVisual, setWallMonitorSosBlend, toggleBedPod, bedFromHit, beginNpcWake, sleeperFromHit, resetSleepingCrew } from "./ship.js?v=20260815bk";
 import { Player } from "./player.js?v=20260815ai";
 import { isTouchDevice, setupMobileControls } from "./mobile.js";
 import { HudPrompt } from "./hud-prompt.js";
 import {
   DOOR_UNLOCK_COST,
   MONITOR_DEBUG_COST,
+  NPC_ACTIVATE_COST,
   fetchCollectedDatapoints,
   getSpentDatapoints,
   addSpentDatapoints,
@@ -447,7 +448,8 @@ async function boot() {
     return !!(
       document.getElementById("unlock-confirm") ||
       document.getElementById("reset-confirm") ||
-      document.getElementById("debug-confirm")
+      document.getElementById("debug-confirm") ||
+      document.getElementById("npc-confirm")
     );
   }
 
@@ -461,6 +463,10 @@ async function boot() {
 
   function closeDebugConfirm() {
     closeShipDialog("debug-confirm");
+  }
+
+  function closeNpcConfirm() {
+    closeShipDialog("npc-confirm");
   }
 
   function showUnlockConfirm(door) {
@@ -557,6 +563,7 @@ async function boot() {
     clearUnlockDenyFx(true);
     clearDebugTween();
     closeDebugConfirm();
+    closeNpcConfirm();
     hoveredUnlockDoor = null;
     hoveredDebugMonitor = null;
     hoveredDeskOption = null;
@@ -567,6 +574,7 @@ async function boot() {
     clearShipBriefingProgress();
     relockAllShipDoors(ship.autoDoors);
     resetAllRoomSos(ship.anim);
+    resetSleepingCrew(ship.anim, ship.root);
     const ud = ship.mainScreen.userData;
     ud.statusView?.reset?.();
     setMainScreenMode(ship, "default");
@@ -941,6 +949,124 @@ async function boot() {
     } catch (_) {}
   }
 
+  function pickBedOrSleeper(clientX, clientY) {
+    if (clientX == null || clientY == null) {
+      unlockNdc.set(0, 0);
+    } else {
+      const rect = renderer.domElement.getBoundingClientRect();
+      unlockNdc.set(
+        ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
+        -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1
+      );
+    }
+    unlockRaycaster.setFromCamera(unlockNdc, camera);
+    unlockRaycaster.far = 4.8;
+    const sleepers = (ship.anim?.sleepingCrew || []).filter(
+      (av) => av.userData.state === "sleeping"
+    );
+    if (sleepers.length) {
+      const hits = unlockRaycaster.intersectObjects(sleepers, true);
+      if (hits.length && hits[0].distance <= 4.8) {
+        const av = sleeperFromHit(hits[0].object, ship.anim.sleepingCrew);
+        if (av && av.userData.state === "sleeping") {
+          const bed = av.userData.bed;
+          if (bed && !bed.userData.podClosed) {
+            unlockRaycaster.far = Infinity;
+            return { sleeper: av, bed };
+          }
+        }
+      }
+    }
+    const beds = ship.anim?.beds || [];
+    if (beds.length) {
+      const hits = unlockRaycaster.intersectObjects(beds, true);
+      if (hits.length && hits[0].distance <= 4.8) {
+        const bed = bedFromHit(hits[0].object);
+        if (bed) {
+          unlockRaycaster.far = Infinity;
+          return { sleeper: null, bed };
+        }
+      }
+    }
+    unlockRaycaster.far = Infinity;
+    return null;
+  }
+
+  function tryActivateNpc(av) {
+    if (!av || av.userData.state !== "sleeping") return false;
+    if (anyShipDialogOpen()) return false;
+    const used = getSpentDatapoints();
+    const avail = availableDatapoints(collectedDatapoints, used);
+    if (avail < NPC_ACTIVATE_COST) {
+      playDoorDenied();
+      shipVoice.trySpeak(pickInsufficientLine());
+      return true;
+    }
+    showNpcConfirm(av);
+    return true;
+  }
+
+  function showNpcConfirm(av) {
+    if (!av || av.userData.state !== "sleeping") return;
+    closeUnlockConfirm();
+    closeResetConfirm();
+    closeDebugConfirm();
+    closeNpcConfirm();
+    try {
+      if (document.pointerLockElement) document.exitPointerLock();
+    } catch (_) {}
+
+    const name = av.userData.npcName || "this crewmate";
+    const wrap = document.createElement("div");
+    wrap.id = "npc-confirm";
+    wrap.className = "ship-confirm";
+    wrap.innerHTML =
+      '<div class="ship-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="npc-confirm-title">' +
+      '<p id="npc-confirm-title">Activate <strong>' +
+      name +
+      "</strong> with <strong>" +
+      NPC_ACTIVATE_COST +
+      " data points</strong>?</p>" +
+      '<div class="ship-confirm-actions">' +
+      '<button type="button" class="ship-confirm-yes" id="npc-confirm-yes">Yes</button>' +
+      '<button type="button" class="ship-confirm-no" id="npc-confirm-no">No</button>' +
+      "</div></div>";
+    wrap.addEventListener("click", (e) => {
+      if (e.target === wrap) closeNpcConfirm();
+    });
+    document.body.appendChild(wrap);
+    document.getElementById("npc-confirm-no")?.addEventListener("click", () => {
+      closeNpcConfirm();
+      if (!touchMode) {
+        try {
+          renderer.domElement.requestPointerLock();
+        } catch (_) {}
+      }
+    });
+    document.getElementById("npc-confirm-yes")?.addEventListener("click", () => {
+      closeNpcConfirm();
+      const used = getSpentDatapoints();
+      const avail = availableDatapoints(collectedDatapoints, used);
+      if (avail < NPC_ACTIVATE_COST) {
+        playDoorDenied();
+        shipVoice.trySpeak(pickInsufficientLine());
+      } else {
+        addSpentDatapoints(NPC_ACTIVATE_COST);
+        syncConsoleDatapoints();
+        beginNpcWake(av, ship.root);
+        playCyberSuccess();
+      }
+      if (!touchMode) {
+        try {
+          renderer.domElement.requestPointerLock();
+        } catch (_) {}
+      }
+    });
+    try {
+      document.getElementById("npc-confirm-yes")?.focus();
+    } catch (_) {}
+  }
+
   function beginDebugRepair(wm) {
     if (!wm || wm.debugged || wm.repairing || debugTweenFx) return;
     const used = getSpentDatapoints();
@@ -1227,6 +1353,17 @@ async function boot() {
           tryUnlockSealedDoor(unlockDoor);
           return;
         }
+        const bunk = touchMode
+          ? pickBedOrSleeper(e.clientX, e.clientY)
+          : pickBedOrSleeper(null, null);
+        if (bunk?.sleeper) {
+          tryActivateNpc(bunk.sleeper);
+          return;
+        }
+        if (bunk?.bed) {
+          toggleBedPod(bunk.bed);
+          return;
+        }
         const opened = touchMode
           ? tryOpenYearByAim(e.clientX, e.clientY)
           : tryOpenYearByAim(null, null);
@@ -1296,6 +1433,15 @@ async function boot() {
           tryUnlockSealedDoor(unlockDoor);
           return;
         }
+        const bunk = pickBedOrSleeper(e.clientX, e.clientY);
+        if (bunk?.sleeper) {
+          tryActivateNpc(bunk.sleeper);
+          return;
+        }
+        if (bunk?.bed) {
+          toggleBedPod(bunk.bed);
+          return;
+        }
         tryOpenYearByAim(e.clientX, e.clientY);
       },
       { passive: true }
@@ -1324,6 +1470,10 @@ async function boot() {
       }
       if (document.getElementById("debug-confirm")) {
         closeDebugConfirm();
+        return;
+      }
+      if (document.getElementById("npc-confirm")) {
+        closeNpcConfirm();
         return;
       }
       if (document.getElementById("reset-confirm")) {
@@ -1629,6 +1779,7 @@ async function boot() {
     if (!mobileQuality || (frame & 1) === 0) {
       updateSleepingCrew(ship.anim?.sleepingCrew, t, player.position);
     }
+    updateAwakeCrew(ship.anim?.sleepingCrew, dt, t);
     // deco only when near animated areas; throttle harder on mobile
     const px = player.position.x;
     const pz = player.position.z;
