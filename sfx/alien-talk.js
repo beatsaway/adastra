@@ -258,14 +258,14 @@ export function playAlienTalk(text, opts = {}) {
     master.gain.value = 0.0001;
     const t0 = ctx.currentTime;
     master.gain.setValueAtTime(0.0001, t0);
-    master.gain.exponentialRampToValueAtTime(1, t0 + 0.04);
-    master.gain.setValueAtTime(1, t0 + Math.max(0.08, dur - 0.12));
+    master.gain.exponentialRampToValueAtTime(0.52, t0 + 0.04);
+    master.gain.setValueAtTime(0.52, t0 + Math.max(0.08, dur - 0.12));
     master.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
     master.connect(ctx.destination);
     _master = master;
 
     const bus = ctx.createGain();
-    bus.gain.value = 3.4;
+    bus.gain.value = 2.1;
     const hp = ctx.createBiquadFilter();
     hp.type = "highpass";
     hp.frequency.value = 90;

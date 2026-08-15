@@ -1,7 +1,7 @@
 import * as THREE from "three";
-import { shipVoice } from "./ai-voice.js?v=20260815dr";
+import { shipVoice } from "./ai-voice.js?v=20260815ez";
 import { pickNpcChitchatLine } from "./npc-chitchat.js?v=20260815ds";
-import { playThinkDot, playNpcBonk, playNpcGearFrenzy } from "../sfx/npc-fun.js?v=20260815ds";
+import { playThinkDot, playNpcBonk, playNpcGearFrenzy } from "../sfx/npc-fun.js?v=20260815ez";
 import { playBriefStart } from "../sfx/brief.js";
 import { isDoorUnlocked as isDoorAlreadyUnlocked, markDoorUnlocked, DOOR_UNLOCK_COST, MONITOR_DEBUG_COST, TOILET_PRINT_COST, isMonitorDebugged, isNpcActivated, markNpcActivated, getPrintedToiletCount, addPrintedToilet } from "./datapoints.js?v=20260815ei";
 
@@ -2391,11 +2391,45 @@ function syncDebugHoloVisibility(wm) {
     !wm.repairing &&
     wm.room?.userData?.lightMode === "sos";
   h.visible = !!show;
+  if (wm.hitPlane) wm.hitPlane.visible = !!show;
   if (!show && h.material) {
     if (h.userData.baseMap) h.material.map = h.userData.baseMap;
     h.material.color.setRGB(1, 1, 1);
     h.material.opacity = h.userData.baseOpacity ?? 0.55;
+    h.scale.set(1, 1, 1);
   }
+}
+
+/** Invisible full-face collider — tap/aim the SOS glass, not just the text. */
+function attachDebugHitPlane(wm, opts = {}) {
+  if (!wm?.group) return null;
+  if (wm.hitPlane) return wm.hitPlane;
+  const maxW = opts.maxW ?? wm.maxW ?? 1.6;
+  const maxH = opts.maxH ?? wm.maxH ?? 0.9;
+  const z = (opts.z ?? 0.081) + 0.02;
+  const mat = new THREE.MeshBasicMaterial({
+    colorWrite: false,
+    depthWrite: false,
+    depthTest: false,
+    side: THREE.DoubleSide,
+    toneMapped: false,
+  });
+  const plane = new THREE.Mesh(
+    new THREE.PlaneGeometry(
+      Math.max(0.9, maxW + 0.4),
+      Math.max(0.62, maxH + 0.4)
+    ),
+    mat
+  );
+  plane.position.set(opts.x ?? 0, opts.hitY ?? 0, z);
+  if (opts.rotY) plane.rotation.y = opts.rotY;
+  plane.frustumCulled = false;
+  plane.renderOrder = 4;
+  plane.userData.debugHit = true;
+  plane.userData.monitorId = wm.id;
+  wm.group.add(plane);
+  wm.hitPlane = plane;
+  return plane;
 }
 
 /** Clickable SOS text on wall monitors (same idea as door unlock holos). */
@@ -2459,8 +2493,16 @@ function attachDebugHoloToMonitor(wm, opts = {}) {
   // Coplanar with screen face; sit in the lower part of the panel
   const z = opts.z ?? 0.081;
   const y = opts.y != null ? opts.y : -maxH * 0.3;
+  attachDebugHitPlane(wm, {
+    maxW,
+    maxH,
+    z,
+    x: opts.x,
+    rotY: opts.rotY,
+    hitY: opts.hitY ?? 0,
+  });
   const holo = makeDebugMonitorHolo(maxW, maxH, opts);
-  holo.position.set(opts.x ?? 0, y, z);
+  holo.position.set(opts.x ?? 0, y, z + 0.004);
   if (opts.rotY) holo.rotation.y = opts.rotY;
   wm.group.add(holo);
   wm.debugHolo = holo;
@@ -2515,7 +2557,14 @@ function registerWallMonitor(anim, room, group, mats, holoOpts = {}) {
     ringMeshes: mats.ringMeshes || [],
     underGlowMat: mats.underGlowMat || null,
     debugHolo: null,
+    hitPlane: null,
+    screen: mats.screen || null,
   };
+  if (entry.screen) {
+    entry.screen.userData.monitorId = id;
+    entry.screen.userData.wallMonitorPick = true;
+  }
+  if (group) group.userData.monitorId = id;
   anim.wallMonitors.push(entry);
   attachDebugHoloToMonitor(entry, holoOpts);
   applyWallMonitorVisual(entry);
@@ -5253,16 +5302,16 @@ function makeBed(group, x, y, z, rotY = 0, tones = {}, interactables = null, roo
 
   // pale glass sleep capsule — unique mat so hover doesn't light every bunk
   const shieldMat = new THREE.MeshStandardMaterial({
-      color: 0xd8e2ec,
-      metalness: 0.12,
-      roughness: 0.16,
-      transparent: true,
-      opacity: 0.72,
+    color: 0xd8e2ec,
+    metalness: 0.12,
+    roughness: 0.16,
+    transparent: true,
+    opacity: 0.72,
     emissive: 0xb8d4ea,
     emissiveIntensity: 0.08,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-    });
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
   const pod = new THREE.Group();
   // CapsuleGeometry is Y-up; rotate onto Z so it runs along the bunk
   const radius = 0.8;
@@ -5569,26 +5618,26 @@ function makeStove(group, x, y, z, rotY = 0, interactables = null, roomOx = 0, r
   g.add(box(0.35, 0.55, 0.32, body, 0, 2.7, -0.2));
 
   const stoveAct = {
-      kind: "stove",
-      on: false,
-      burnerMat,
-      position: new THREE.Vector3(roomOx + x, 1.0, roomOz + z),
-      radius: 2.4,
-      prompt() {
-        return this.on ? "Press E · Turn stove off" : "Press E · Turn stove on";
-      },
-      toggle() {
-        this.on = !this.on;
-        if (this.on) {
-          this.burnerMat.color.setHex(0xff6622);
-          this.burnerMat.emissive.setHex(0xff4411);
-          this.burnerMat.emissiveIntensity = 0.65;
-        } else {
-          this.burnerMat.color.setHex(0x6a7078);
-          this.burnerMat.emissive.setHex(0x000000);
-          this.burnerMat.emissiveIntensity = 0;
-        }
-      },
+    kind: "stove",
+    on: false,
+    burnerMat,
+    position: new THREE.Vector3(roomOx + x, 1.0, roomOz + z),
+    radius: 2.4,
+    prompt() {
+      return this.on ? "Press E · Turn stove off" : "Press E · Turn stove on";
+    },
+    toggle() {
+      this.on = !this.on;
+      if (this.on) {
+        this.burnerMat.color.setHex(0xff6622);
+        this.burnerMat.emissive.setHex(0xff4411);
+        this.burnerMat.emissiveIntensity = 0.65;
+      } else {
+        this.burnerMat.color.setHex(0x6a7078);
+        this.burnerMat.emissive.setHex(0x000000);
+        this.burnerMat.emissiveIntensity = 0;
+      }
+    },
   };
   g.userData.toggle = () => stoveAct.toggle();
   g.userData.stand = { x: roomOx + x, z: roomOz + z + 0.95, face: Math.PI };
@@ -6168,13 +6217,13 @@ function makeStallBank(room, colliders, interactables, roomOx, roomOz, {
       if (special) {
         makeToilet(g, slotX, 0, slotZ, 0, {
           special: true,
-        interactables,
-        roomOx,
-        roomOz,
-        bankCx: cx,
-        bankCz: cz,
-        bankRotY: rotY,
-      });
+          interactables,
+          roomOx,
+          roomOz,
+          bankCx: cx,
+          bankCz: cz,
+          bankRotY: rotY,
+        });
       }
       makeLooRoll(g, slotX + stallW * 0.5 - 0.03, 0.95, -depth * 0.08);
       if (slotsOut) {
@@ -6975,11 +7024,11 @@ function makeBigScreen(group, anim, x, y, z, w, h, rotY = 0, opts = {}) {
   for (let i = 0; i < segments.length; i++) {
     const s = segments[i];
     const ringMat = new THREE.MeshBasicMaterial({
-        color: i % 2 ? 0x66ffcc : 0x44aaff,
-        side: THREE.DoubleSide,
-        transparent: true,
-        opacity: 0.7,
-        depthWrite: false,
+      color: i % 2 ? 0x66ffcc : 0x44aaff,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.7,
+      depthWrite: false,
     });
     ringMats.push(ringMat);
     const seg = new THREE.Mesh(
@@ -7026,6 +7075,7 @@ function makeBigScreen(group, anim, x, y, z, w, h, rotY = 0, opts = {}) {
     });
     registerWallMonitor(anim, group, g, {
       screenMat,
+      screen,
       barMats,
       ringMats,
       barMeshes,
@@ -8092,7 +8142,7 @@ export function updateSouthCorridorGate(anim, player, dt) {
     const toss = gate.toss;
     toss.t += dt;
     const u = Math.min(1, toss.t / toss.dur);
-    const ease = 1 - (1 - u) * (1 - u) * (1 - u);
+    const ease = u * u * u * (u * (u * 6 - 15) + 10);
     player.position.x = toss.x0 + (toss.x1 - toss.x0) * ease;
     player.position.z = toss.z0 + (toss.z1 - toss.z0) * ease;
     player.position.y = player.eye + toss.peak * 4 * u * (1 - u);
@@ -8107,6 +8157,10 @@ export function updateSouthCorridorGate(anim, player, dt) {
   }
 
   if (!player.locked || player.inputFrozen) return false;
+  if ((gate.cool || 0) > 0) {
+    gate.cool -= dt;
+    return false;
+  }
   const x = player.position.x;
   const z = player.position.z;
   // South of the hub doorway, on the north–south spine
@@ -8115,19 +8169,16 @@ export function updateSouthCorridorGate(anim, player, dt) {
   player.inputFrozen = true;
   player.stickX = 0;
   player.stickY = 0;
-  player.lookStickX = 0;
-  player.lookStickY = 0;
-  const x1 = 0;
-  const z1 = 12.6;
-  const dist = Math.hypot(x1 - x, z1 - z);
+  // Short shove back into the hub — do not yeet to the north hatch
+  gate.cool = 0.4;
   gate.toss = {
     t: 0,
-    dur: Math.min(0.55, 0.28 + dist * 0.016),
+    dur: 0.3,
     x0: x,
     z0: z,
-    x1,
-    z1,
-    peak: 0.72,
+    x1: x * 0.85,
+    z1: 0.4,
+    peak: 0.1,
   };
   return true;
 }

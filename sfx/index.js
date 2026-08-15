@@ -10,8 +10,8 @@ export { ShipAmbience } from "./ambience.js?v=20260815bd";
 export { ProximityTransformerHum } from "./transformer.js?v=20260815bd";
 export { playHoloHover, InfoHubHoloHiss } from "./holo.js?v=20260815cm";
 export { SleeperLevitateHum } from "./sleeper-hover.js?v=20260815ct";
-export { HubHaloHum } from "./hub-halo.js?v=20260815cy";
-export { playElectricShock, playDigitalGlitch, playHullRumble, playGlassDenied, playCeilingSpark } from "./shock.js?v=20260815do";
+export { HubHaloHum } from "./hub-halo.js?v=20260815ex";
+export { playElectricShock, playDigitalGlitch, playHullRumble, playGlassDenied, playCeilingSpark, playMonitorSpark } from "./shock.js?v=20260815ey";
 export { playScene1EnergyField, stopScene1EnergyField } from "./scene1-field.js?v=20260815ed";
 export {
   playYearReveal,

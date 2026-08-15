@@ -1,6 +1,6 @@
 import * as THREE from "three";
-import { buildShip, createSpaceView, createStatusView, updateAutoDoors, updateStallDoors, nearestInteractable, nearestLockedDoor, LOCKED_DOOR_LINES, INSUFFICIENT_DATAPOINT_LINES, pickStationLockedLine, pickRoomRestoredLine, pickSouthGateLine, pickCockpitExitLine, pickToiletQuotaLine, updateSosLights, updatePlants, updateSleepingCrew, updateAwakeCrew, updateSittingCrew, updateNpcChitchat, updateNpcWiggle, pokeWaitingNpc, waitingNpcFromHit, downgradeMaterialsForMobile, unlockShipDoor, relockAllShipDoors, clearShipBriefingProgress, debugWallMonitor, resetAllRoomSos, applyWallMonitorVisual, setWallMonitorSosBlend, updateWallMonitorSosPulse, toggleBedPod, setBedPodHover, isNpcWorkRoomLocked, bedFromHit, beginNpcWake, sleeperFromHit, resetSleepingCrew, pumpPendingSosRestore, updateHubFloorHalos, updateSouthCorridorGate, printToiletInWashroom, resetPrintedToilets, toiletSlotsLeft, getFacilityBoard, getCrewBoard, wallMonitorsInSameRoom, roomDebugClearsAll } from "./ship.js?v=20260815et";
-import { createSosCeilingSparks, updateSosCeilingSparks } from "./sos-sparks.js?v=20260815dk";
+import { buildShip, createSpaceView, createStatusView, updateAutoDoors, updateStallDoors, nearestInteractable, nearestLockedDoor, LOCKED_DOOR_LINES, INSUFFICIENT_DATAPOINT_LINES, pickStationLockedLine, pickRoomRestoredLine, pickSouthGateLine, pickCockpitExitLine, pickToiletQuotaLine, updateSosLights, updatePlants, updateSleepingCrew, updateAwakeCrew, updateSittingCrew, updateNpcChitchat, updateNpcWiggle, pokeWaitingNpc, waitingNpcFromHit, downgradeMaterialsForMobile, unlockShipDoor, relockAllShipDoors, clearShipBriefingProgress, debugWallMonitor, resetAllRoomSos, applyWallMonitorVisual, setWallMonitorSosBlend, updateWallMonitorSosPulse, toggleBedPod, setBedPodHover, isNpcWorkRoomLocked, bedFromHit, beginNpcWake, sleeperFromHit, resetSleepingCrew, pumpPendingSosRestore, updateHubFloorHalos, updateSouthCorridorGate, printToiletInWashroom, resetPrintedToilets, toiletSlotsLeft, getFacilityBoard, getCrewBoard, wallMonitorsInSameRoom, roomDebugClearsAll } from "./ship.js?v=20260815fc";
+import { createSosCeilingSparks, updateSosCeilingSparks, burstSparksAt } from "./sos-sparks.js?v=20260815ey";
 import { Player } from "./player.js?v=20260815ai";
 import { isTouchDevice, setupMobileControls } from "./mobile.js";
 import { HudPrompt } from "./hud-prompt.js?v=20260815cb";
@@ -20,9 +20,9 @@ import {
 } from "./datapoints.js?v=20260815ei";
 import { ShipScenes, SCENE } from "./scenes.js";
 import { createScene1Intro, applyCockpitShake } from "./scene1-intro.js?v=20260815ee";
-import { shipVoice } from "./ai-voice.js?v=20260815dr";
+import { shipVoice } from "./ai-voice.js?v=20260815ez";
 import { createAiDrone } from "./ai-drone.js";
-import { ShipAmbience, ProximityTransformerHum, InfoHubHoloHiss, SleeperLevitateHum, HubHaloHum, playDoorOpen, playDoorClose, playDoorAuth, playCyberSuccess, playPodToggle, playHoloHover, playElectricShock, playDigitalGlitch, playHullRumble, playGlassDenied, playCeilingSpark, resumeAudio, playYearReveal, playYearCollapse, playYearHover, playYearPick, playEnterShip } from "../sfx/index.js?v=20260815eg";
+import { ShipAmbience, ProximityTransformerHum, InfoHubHoloHiss, SleeperLevitateHum, HubHaloHum, playDoorOpen, playDoorClose, playDoorAuth, playCyberSuccess, playPodToggle, playHoloHover, playElectricShock, playDigitalGlitch, playHullRumble, playGlassDenied, playCeilingSpark, playMonitorSpark, resumeAudio, playYearReveal, playYearCollapse, playYearHover, playYearPick, playEnterShip } from "../sfx/index.js?v=20260815ey";
 
 const loaderEl = document.getElementById("loader");
 const loadBar = document.getElementById("load-bar");
@@ -202,8 +202,11 @@ async function boot() {
   setProgress(48, "Loading…");
   const ship = buildShip(scene);
   const sosSparks = createSosCeilingSparks(ship.root);
-  sosSparks.onBurst = (dist) => {
-    playCeilingSpark(1 - Math.min(0.7, dist / 14));
+  sosSparks.onBurst = (hit) => {
+    const dist = typeof hit === "number" ? hit : hit?.dist;
+    const g = 1 - Math.min(0.7, (Number(dist) || 6) / 14);
+    if (hit?.monitor) playMonitorSpark(g);
+    else playCeilingSpark(g);
   };
   if (mobileQuality) {
     downgradeMaterialsForMobile(ship.root);
@@ -1178,6 +1181,8 @@ async function boot() {
     const wrap = document.createElement("div");
     wrap.id = "debug-confirm";
     wrap.className = "ship-confirm";
+    // Block ghost-click from the same finger tap that opened this dialog (mobile)
+    wrap.style.pointerEvents = "none";
     wrap.innerHTML =
       '<div class="ship-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="debug-confirm-title">' +
       '<p id="debug-confirm-title">Do you want to spend <strong>' +
@@ -1187,20 +1192,39 @@ async function boot() {
       '<button type="button" class="ship-confirm-yes" id="debug-confirm-yes">Yes</button>' +
       '<button type="button" class="ship-confirm-no" id="debug-confirm-no">No</button>' +
       "</div></div>";
+    const armMs = touchMode ? 480 : 0;
+    const armedAt = performance.now() + armMs;
+    wrap.addEventListener(
+      "pointerup",
+      (e) => {
+        if (performance.now() < armedAt) {
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
+        if (e.target === wrap) closeDebugConfirm();
+      },
+      true
+    );
     wrap.addEventListener("click", (e) => {
+      if (performance.now() < armedAt) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       if (e.target === wrap) closeDebugConfirm();
     });
     document.body.appendChild(wrap);
     syncConfirmCursor();
-    document.getElementById("debug-confirm-no")?.addEventListener("click", () => {
+    const finishNo = () => {
       closeDebugConfirm();
       if (!touchMode) {
         try {
           renderer.domElement.requestPointerLock();
         } catch (_) {}
       }
-    });
-    document.getElementById("debug-confirm-yes")?.addEventListener("click", () => {
+    };
+    const finishYes = () => {
       closeDebugConfirm();
       beginDebugRepair(wm);
       if (!touchMode) {
@@ -1208,9 +1232,33 @@ async function boot() {
           renderer.domElement.requestPointerLock();
         } catch (_) {}
       }
-    });
+    };
+    const noBtn = document.getElementById("debug-confirm-no");
+    const yesBtn = document.getElementById("debug-confirm-yes");
+    let answered = false;
+    const onNo = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (performance.now() < armedAt || answered) return;
+      answered = true;
+      finishNo();
+    };
+    const onYes = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (performance.now() < armedAt || answered) return;
+      answered = true;
+      finishYes();
+    };
+    noBtn?.addEventListener("pointerup", onNo);
+    yesBtn?.addEventListener("pointerup", onYes);
+    noBtn?.addEventListener("click", onNo);
+    yesBtn?.addEventListener("click", onYes);
+    setTimeout(() => {
+      if (wrap.isConnected) wrap.style.pointerEvents = "auto";
+    }, armMs || 0);
     try {
-      document.getElementById("debug-confirm-yes")?.focus();
+      yesBtn?.focus();
     } catch (_) {}
   }
 
@@ -1326,16 +1374,11 @@ async function boot() {
     debugTweenFx = null;
   }
 
-  function debugHoloMeshes() {
-    const out = [];
-    for (const wm of ship.anim?.wallMonitors || []) {
-      const h = wm.debugHolo;
-      if (h?.visible && !wm.debugged && !wm.repairing && wm.room?.userData?.lightMode === "sos") {
-        if (isCockpitWallMonitor(wm) && !briefingScriptDone()) continue;
-        out.push(h);
-      }
-    }
-    return out;
+  function debugMonitorEligible(wm) {
+    if (!wm || wm.debugged || wm.repairing) return false;
+    if (wm.room?.userData?.lightMode !== "sos") return false;
+    if (isCockpitWallMonitor(wm) && !briefingScriptDone()) return false;
+    return true;
   }
 
   function monitorFromDebugHit(obj) {
@@ -1345,15 +1388,15 @@ async function boot() {
       if (id) {
         return (ship.anim?.wallMonitors || []).find((m) => m.id === id) || null;
       }
-      if (o.userData?.debugHolo) break;
       o = o.parent;
     }
     for (const wm of ship.anim?.wallMonitors || []) {
-      if (wm.debugHolo === obj || wm.debugHolo?.uuid === obj?.uuid) return wm;
+      if (wm.hitPlane === obj || wm.screen === obj || wm.debugHolo === obj) return wm;
     }
     return null;
   }
 
+  /** Crosshair / tap vs full SOS glass (not just the debug text). */
   function pickDebugMonitor(clientX, clientY) {
     if (clientX == null || clientY == null) {
       unlockNdc.set(0, 0);
@@ -1365,38 +1408,74 @@ async function boot() {
       );
     }
     unlockRaycaster.setFromCamera(unlockNdc, camera);
-    unlockRaycaster.far = 4.6;
-    const meshes = debugHoloMeshes();
-    if (!meshes.length) {
+    const far = touchMode ? 7.4 : 6.4;
+    unlockRaycaster.far = far;
+
+    const targets = [];
+    for (const wm of ship.anim?.wallMonitors || []) {
+      if (!debugMonitorEligible(wm)) continue;
+      if (wm.hitPlane) {
+        wm.hitPlane.visible = true;
+        targets.push(wm.hitPlane);
+      }
+      if (wm.screen) targets.push(wm.screen);
+      if (wm.debugHolo) targets.push(wm.debugHolo);
+    }
+    if (!targets.length) {
       unlockRaycaster.far = Infinity;
       return null;
     }
-    const hits = unlockRaycaster.intersectObjects(meshes, false);
+    const hits = unlockRaycaster.intersectObjects(targets, false);
     unlockRaycaster.far = Infinity;
-    if (!hits.length || hits[0].distance > 4.6) return null;
+    if (!hits.length || hits[0].distance > far) return null;
     return monitorFromDebugHit(hits[0].object);
+  }
+
+  function clearDebugMonitorHoverVisual(wm) {
+    if (!wm) return;
+    wm._debugAimHover = false;
+    const h = wm.debugHolo;
+    if (h?.material) {
+      if (h.userData.baseMap) h.material.map = h.userData.baseMap;
+      h.material.color.setRGB(1, 1, 1);
+      h.material.opacity = h.userData.baseOpacity ?? 0.55;
+      h.material.needsUpdate = true;
+      h.scale.set(1, 1, 1);
+    }
+  }
+
+  function applyDebugMonitorHoverVisual(wm) {
+    if (!wm) return;
+    wm._debugAimHover = true;
+    const h = wm.debugHolo;
+    if (!h?.material) return;
+    h.visible = true;
+    if (h.userData.hoverMap) h.material.map = h.userData.hoverMap;
+    h.material.color.setRGB(1, 1, 1);
+    h.material.opacity = 1;
+    h.material.needsUpdate = true;
+    h.scale.set(1.15, 1.15, 1.15);
+  }
+
+  function updateDebugMonitorAimHover() {
+    if (anyShipDialogOpen() || yearTransit || debugTweenFx || !player.locked) {
+      setDebugMonitorHover(null);
+      return;
+    }
+    // Phone look-stick + PC pointer-lock: glow from screen centre aim
+    if (touchMode || document.pointerLockElement === renderer.domElement) {
+      setDebugMonitorHover(pickDebugMonitor(null, null));
+    }
   }
 
   function setDebugMonitorHover(wm) {
     if (anyShipDialogOpen()) return;
-    if (hoveredDebugMonitor && hoveredDebugMonitor !== wm && hoveredDebugMonitor.debugHolo) {
-      const h = hoveredDebugMonitor.debugHolo;
-      if (h.material) {
-        if (h.userData.baseMap) h.material.map = h.userData.baseMap;
-        h.material.color.setRGB(1, 1, 1);
-        h.material.opacity = h.userData.baseOpacity ?? 0.55;
-        h.material.needsUpdate = true;
-      }
+    if (hoveredDebugMonitor && hoveredDebugMonitor !== wm) {
+      clearDebugMonitorHoverVisual(hoveredDebugMonitor);
     }
     if (wm && wm !== hoveredDebugMonitor) playHoloHover();
     hoveredDebugMonitor = wm || null;
-    if (wm?.debugHolo?.material) {
-      const h = wm.debugHolo;
-      if (h.userData.hoverMap) h.material.map = h.userData.hoverMap;
-      h.material.color.setRGB(1, 1, 1);
-      h.material.opacity = h.userData.hoverOpacity ?? 0.98;
-      h.material.needsUpdate = true;
-    }
+    if (wm) applyDebugMonitorHoverVisual(wm);
   }
 
   function pickBedOrSleeper(clientX, clientY) {
@@ -1670,6 +1749,8 @@ async function boot() {
   document.addEventListener("webkitfullscreenchange", syncDisplayOptLabel);
 
   renderer.domElement.addEventListener("click", (e) => {
+    // Mobile uses pointerup only — click after pointerup double-fires and breaks confirm
+    if (touchMode) return;
     if (!overlay.classList.contains("hidden") || !loaderEl.classList.contains("hidden")) {
       return;
     }
@@ -1677,54 +1758,40 @@ async function boot() {
     if (player.locked) {
       // PC: unlock / desk options only via crosshair aim (pointer lock).
       // Free-cursor clicks just re-lock look — never spend datapoints by accident.
-      const aimOk = touchMode || document.pointerLockElement === renderer.domElement;
+      const aimOk = document.pointerLockElement === renderer.domElement;
       if (aimOk) {
-        const deskOpt = touchMode
-          ? pickDeskOption(e.clientX, e.clientY)
-          : pickDeskOption(null, null);
+        const deskOpt = pickDeskOption(null, null);
         if (deskOpt) {
           activateDeskOption(deskOpt);
           return;
         }
-        const debugMon = touchMode
-          ? pickDebugMonitor(e.clientX, e.clientY)
-          : pickDebugMonitor(null, null);
+        const debugMon = pickDebugMonitor(null, null);
         if (debugMon) {
           tryDebugWallMonitor(debugMon);
           return;
         }
-        const printHolo = touchMode
-          ? pickToiletPrint(e.clientX, e.clientY)
-          : pickToiletPrint(null, null);
+        const printHolo = pickToiletPrint(null, null);
         if (printHolo) {
           tryPrintToilet();
           return;
         }
-        const unlockDoor = touchMode
-          ? pickUnlockDoor(e.clientX, e.clientY)
-          : pickUnlockDoor(null, null);
+        const unlockDoor = pickUnlockDoor(null, null);
         if (unlockDoor) {
           tryUnlockSealedDoor(unlockDoor);
           return;
         }
-        const bunk = touchMode
-          ? pickBedOrSleeper(e.clientX, e.clientY)
-          : pickBedOrSleeper(null, null);
+        const bunk = pickBedOrSleeper(null, null);
         if (bunk?.sleeper) {
           tryActivateNpc(bunk.sleeper);
           return;
         }
-        const waiter = touchMode
-          ? pickWaitingNpc(e.clientX, e.clientY)
-          : pickWaitingNpc(null, null);
+        const waiter = pickWaitingNpc(null, null);
         if (waiter && pokeWaitingNpc(waiter)) return;
         if (bunk?.bed) {
           playPodClick(toggleBedPod(bunk.bed));
           return;
         }
-        const opened = touchMode
-          ? tryOpenYearByAim(e.clientX, e.clientY)
-          : tryOpenYearByAim(null, null);
+        const opened = tryOpenYearByAim(null, null);
         if (opened) return;
       }
     }
@@ -1788,24 +1855,30 @@ async function boot() {
     });
   }
 
-  // Mobile: tap year mesh (avoid steal from on-screen sticks / E button)
+  // Mobile: tap interactions (pointerup only — do not also handle click)
   if (touchMode) {
+    let lastDebugTapMs = 0;
     renderer.domElement.addEventListener(
       "pointerup",
       (e) => {
         if (!player.locked) return;
-        if (e.target !== renderer.domElement) return;
+        if (e.pointerType === "mouse") return;
+        if (!renderer.domElement.contains(e.target)) return;
+        if (anyShipDialogOpen() || unlockVaporFx || debugTweenFx) return;
         if (mobileRoot && !mobileRoot.classList.contains("hidden")) {
-          const t = e.target;
-          if (t && mobileRoot.contains(t)) return;
+          if (e.target && mobileRoot.contains(e.target)) return;
         }
         const deskOpt = pickDeskOption(e.clientX, e.clientY);
         if (deskOpt) {
           activateDeskOption(deskOpt);
           return;
         }
-        const debugMon = pickDebugMonitor(e.clientX, e.clientY);
+        let debugMon = pickDebugMonitor(e.clientX, e.clientY);
+        if (!debugMon) debugMon = pickDebugMonitor(null, null);
         if (debugMon) {
+          const now = performance.now();
+          if (now - lastDebugTapMs < 450) return;
+          lastDebugTapMs = now;
           tryDebugWallMonitor(debugMon);
           return;
         }
@@ -1873,6 +1946,7 @@ async function boot() {
       }
     }
     if (e.code === "KeyR" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (!enteringShip) return;
       e.preventDefault();
       showResetConfirm();
       return;
@@ -2018,8 +2092,23 @@ async function boot() {
       player.update(dt);
     }
     if (updateSouthCorridorGate(ship.anim, player, dt)) {
+      shockShakeT = SHOCK_SHAKE_DUR;
       playElectricShock();
-      playDigitalGlitch();
+      const fence = ship.anim?.southGate?.fence?.mesh;
+      if (fence) {
+        fence.getWorldPosition(holoWorldPos);
+        const fx = holoWorldPos.x;
+        const fy = holoWorldPos.y;
+        const fz = holoWorldPos.z;
+        const xs = [-1.05, -0.55, 0, 0.55, 1.05];
+        for (let i = 0; i < xs.length; i++) {
+          burstSparksAt(sosSparks, fx + xs[i], fy + (i % 2 ? 0.35 : -0.2), fz, {
+            nx: 0, ny: 0.2, nz: 1, scale: 0.62, rays: 3, embers: 4,
+          });
+        }
+        burstSparksAt(sosSparks, fx, fy + 0.85, fz, { nx: 0, ny: 0.1, nz: 1, scale: 0.5, rays: 3, embers: 3 });
+        burstSparksAt(sosSparks, fx, fy - 0.7, fz, { nx: 0, ny: 0.45, nz: 1, scale: 0.5, rays: 3, embers: 3 });
+      }
       const line = pickSouthGateLine();
       setTimeout(() => shipVoice.trySpeak(line), 280);
     }
@@ -2029,9 +2118,7 @@ async function boot() {
     }
     if (shockShakeT > 0) {
       shockShakeT = Math.max(0, shockShakeT - dt);
-      if (!tossingNow) {
-        applyCockpitShake(camera, t, shockShakeT / SHOCK_SHAKE_DUR);
-      }
+      applyCockpitShake(camera, t, shockShakeT / SHOCK_SHAKE_DUR);
     }
     {
       const wantRumble =
@@ -2218,13 +2305,18 @@ async function boot() {
           !(isCockpitWallMonitor(wm) && !briefingScriptDone());
         if (!canShow) {
           h.visible = false;
+          if (wm.hitPlane) wm.hitPlane.visible = false;
           continue;
         }
+        if (wm.hitPlane) wm.hitPlane.visible = true;
         h.getWorldPosition(holoWorldPos);
         const dx = holoWorldPos.x - px;
         const dz = holoWorldPos.z - pz;
-        h.visible = dx * dx + dz * dz <= nearR2;
+        const near = dx * dx + dz * dz <= nearR2;
+        h.visible = near || wm === hoveredDebugMonitor;
       }
+      // Crosshair / look-stick aim glow every frame (PC + phone)
+      updateDebugMonitorAimHover();
       // Door lintel glow labels — hide when far; sealed rooms stay unnamed
       if (ship.root && (frame & 3) === 0) {
         ship.root.traverse((o) => {
@@ -2258,6 +2350,7 @@ async function boot() {
     updateSosCeilingSparks(sosSparks, dt, roomAtPlayer(), player.position, {
       active: player.locked && !yearTransit,
       mobile: mobileQuality,
+      monitors: ship.anim?.wallMonitors,
     });
     pumpPendingSosRestore(ship.anim);
     updatePlants(ship.anim, t);

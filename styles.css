@@ -205,7 +205,8 @@ canvas {
   gap: 0.7rem;
 }
 
-#start-btn {
+#start-btn,
+.enter-google {
   font-family: "Sora", "IBM Plex Sans", system-ui, sans-serif;
   font-size: 0.95rem;
   letter-spacing: 0.08em;
@@ -219,10 +220,28 @@ canvas {
   transition: background 0.15s, box-shadow 0.15s, border-color 0.15s;
 }
 
-#start-btn:hover {
+#start-btn:hover,
+.enter-google:hover {
   background: #f7f9fc;
   border-color: #ff6a4a;
   box-shadow: 0 0 0 3px rgba(255, 106, 74, 0.18);
+}
+
+.enter-google {
+  background: #1e2733;
+  color: #f4f7fb;
+  border-color: #1e2733;
+}
+
+.enter-google:hover {
+  background: #2a3544;
+  color: #ffffff;
+  border-color: #44aaff;
+  box-shadow: 0 0 0 3px rgba(68, 170, 255, 0.22);
+}
+
+.enter-google.hidden {
+  display: none;
 }
 
 .keys {

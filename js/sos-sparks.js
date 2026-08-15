@@ -7,6 +7,11 @@ import * as THREE from "three";
 const MAX_DOTS = 22;
 const MAX_CRACKS = 10;
 const CRACK_VERTS = MAX_CRACKS * 2;
+const _wp = new THREE.Vector3();
+const _dir = new THREE.Vector3();
+const _local = new THREE.Vector3();
+const _out = new THREE.Vector3();
+const _mid = new THREE.Vector3();
 
 function sparkDotTex() {
   const c = document.createElement("canvas");
@@ -118,20 +123,31 @@ function hideDot(sys, i) {
   sys.dCol[d] = sys.dCol[d + 1] = sys.dCol[d + 2] = 0;
 }
 
-function spawnRay(sys, x, y, z, cool) {
+function spawnRay(sys, x, y, z, cool, nx, ny, nz, scale = 1) {
   for (let i = 0; i < sys.rays.length; i++) {
     const r = sys.rays[i];
     if (r.alive) continue;
-    const az = Math.random() * Math.PI * 2;
-    const dip = 0.15 + Math.random() * 0.7;
-    const len = 0.16 + Math.random() * 0.22;
+    const len = (0.16 + Math.random() * 0.22) * scale;
     r.alive = true;
     r.x = x;
     r.y = y;
     r.z = z;
-    r.dx = Math.cos(az) * Math.cos(dip) * len;
-    r.dy = -Math.sin(dip) * len;
-    r.dz = Math.sin(az) * Math.cos(dip) * len;
+    if (nx != null) {
+      const scatter = scale < 1 ? 0.65 : 1.5;
+      let dx = nx + (Math.random() - 0.5) * scatter;
+      let dy = ny + (Math.random() - 0.5) * scatter;
+      let dz = nz + (Math.random() - 0.5) * scatter;
+      const s = Math.hypot(dx, dy, dz) || 1;
+      r.dx = (dx / s) * len;
+      r.dy = (dy / s) * len;
+      r.dz = (dz / s) * len;
+    } else {
+      const az = Math.random() * Math.PI * 2;
+      const dip = 0.15 + Math.random() * 0.7;
+      r.dx = Math.cos(az) * Math.cos(dip) * len;
+      r.dy = -Math.sin(dip) * len;
+      r.dz = Math.sin(az) * Math.cos(dip) * len;
+    }
     r.age = 0;
     r.life = 0.08 + Math.random() * 0.07;
     r.cool = cool;
@@ -140,19 +156,29 @@ function spawnRay(sys, x, y, z, cool) {
   return false;
 }
 
-function spawnEmber(sys, x, y, z, cool) {
+function spawnEmber(sys, x, y, z, cool, nx, ny, nz, scale = 1) {
   for (let i = 0; i < sys.embers.length; i++) {
     const s = sys.embers[i];
     if (s.alive) continue;
-    const az = Math.random() * Math.PI * 2;
-    const spd = 0.7 + Math.random() * 1.6;
+    const spd = (0.7 + Math.random() * 1.6) * scale;
     s.alive = true;
     s.x = x;
     s.y = y;
     s.z = z;
-    s.vx = Math.cos(az) * spd * (0.35 + Math.random() * 0.8);
-    s.vy = -0.2 - Math.random() * 1.4;
-    s.vz = Math.sin(az) * spd * (0.35 + Math.random() * 0.8);
+    if (nx != null) {
+      let dx = nx + (Math.random() - 0.5) * 1.6;
+      let dy = ny + (Math.random() - 0.5) * 1.4;
+      let dz = nz + (Math.random() - 0.5) * 1.6;
+      const s0 = Math.hypot(dx, dy, dz) || 1;
+      s.vx = (dx / s0) * spd;
+      s.vy = (dy / s0) * spd * 0.55 - 0.15;
+      s.vz = (dz / s0) * spd;
+    } else {
+      const az = Math.random() * Math.PI * 2;
+      s.vx = Math.cos(az) * spd * (0.35 + Math.random() * 0.8);
+      s.vy = -0.2 - Math.random() * 1.4;
+      s.vz = Math.sin(az) * spd * (0.35 + Math.random() * 0.8);
+    }
     s.age = 0;
     s.life = 0.22 + Math.random() * 0.2;
     s.cool = cool;
@@ -181,23 +207,105 @@ function pickOrigin(room, px, pz) {
   return { x, y: dims.h - 0.08, z };
 }
 
-function spawnBurst(sys, room, px, pz) {
-  const o = pickOrigin(room, px, pz);
+function pickMonitorOrigin(monitors, room) {
+  if (!monitors || !room) return null;
+  let pick = null;
+  let n = 0;
+  for (let i = 0; i < monitors.length; i++) {
+    const wm = monitors[i];
+    if (!wm?.group || wm.debugged || wm.repairing) continue;
+    if (wm.room?.userData !== room) continue;
+    if (room.lightMode !== "sos") continue;
+    n += 1;
+    if (Math.random() * n < 1) pick = wm;
+  }
+  if (!pick) return null;
+  const hw = (pick.maxW || 1.6) * 0.48;
+  const hh = (pick.maxH || 0.9) * 0.48;
+  const edge = (Math.random() * 4) | 0;
+  let lx = 0;
+  let ly = 0;
+  if (edge === 0) {
+    lx = (Math.random() * 2 - 1) * hw;
+    ly = hh;
+  } else if (edge === 1) {
+    lx = (Math.random() * 2 - 1) * hw;
+    ly = -hh;
+  } else if (edge === 2) {
+    lx = -hw;
+    ly = (Math.random() * 2 - 1) * hh;
+  } else {
+    lx = hw;
+    ly = (Math.random() * 2 - 1) * hh;
+  }
+  pick.group.localToWorld(_wp.set(lx, ly, 0.05));
+  pick.group.getWorldDirection(_dir);
+  pick.group.getWorldPosition(_mid);
+  pick.group.localToWorld(_out.set(lx, ly, 0));
+  _out.sub(_mid);
+  if (_out.lengthSq() < 1e-6) _out.copy(_dir);
+  else _out.normalize();
+  _dir.multiplyScalar(0.3).addScaledVector(_out, 0.7);
+  const s = _dir.length() || 1;
+  _dir.multiplyScalar(1 / s);
+  return {
+    x: _wp.x, y: _wp.y, z: _wp.z,
+    nx: _dir.x, ny: _dir.y, nz: _dir.z,
+    monitor: true,
+  };
+}
+
+function spawnBurst(sys, room, px, pz, monitors) {
+  let o = null;
+  if (monitors && Math.random() < 0.58) o = pickMonitorOrigin(monitors, room);
+  if (!o) o = pickOrigin(room, px, pz);
   if (!o) return -1;
   const cool = Math.random() > 0.5 ? 1 : 0;
-  const rays = 3 + ((Math.random() * 3) | 0);
-  const n = 4 + ((Math.random() * 4) | 0);
-  for (let i = 0; i < rays; i++) spawnRay(sys, o.x, o.y, o.z, cool);
+  const mon = !!o.monitor;
+  const scale = mon ? 0.52 : 1;
+  const rays = mon ? 2 + ((Math.random() * 2) | 0) : 3 + ((Math.random() * 3) | 0);
+  const n = mon ? 2 + ((Math.random() * 2) | 0) : 4 + ((Math.random() * 4) | 0);
+  for (let i = 0; i < rays; i++) spawnRay(sys, o.x, o.y, o.z, cool, o.nx, o.ny, o.nz, scale);
   for (let i = 0; i < n; i++) {
     spawnEmber(
       sys,
-      o.x + (Math.random() - 0.5) * 0.08,
+      o.x + (Math.random() - 0.5) * 0.04,
       o.y,
-      o.z + (Math.random() - 0.5) * 0.08,
-      cool
+      o.z + (Math.random() - 0.5) * 0.04,
+      cool,
+      o.nx,
+      o.ny,
+      o.nz,
+      scale
     );
   }
-  return Math.hypot(px - o.x, pz - o.z);
+  return { dist: Math.hypot(px - o.x, pz - o.z), monitor: mon };
+}
+
+/** Extra burst at a world point (force-field hit). Same particle pool. */
+export function burstSparksAt(sys, x, y, z, opts = {}) {
+  if (!sys) return;
+  const cool = 0;
+  const scale = opts.scale ?? 0.62;
+  const nx = opts.nx;
+  const ny = opts.ny;
+  const nz = opts.nz;
+  const rays = opts.rays ?? 4;
+  const n = opts.embers ?? 5;
+  for (let i = 0; i < rays; i++) spawnRay(sys, x, y, z, cool, nx, ny, nz, scale);
+  for (let i = 0; i < n; i++) {
+    spawnEmber(
+      sys,
+      x + (Math.random() - 0.5) * 0.1,
+      y + (Math.random() - 0.5) * 0.08,
+      z + (Math.random() - 0.5) * 0.1,
+      cool,
+      nx,
+      ny,
+      nz,
+      scale
+    );
+  }
 }
 
 export function updateSosCeilingSparks(sys, dt, room, playerPos, opts = {}) {
@@ -209,12 +317,14 @@ export function updateSosCeilingSparks(sys, dt, room, playerPos, opts = {}) {
     sys.wait -= dt;
     if (sys.wait <= 0) {
       sys.wait = mobile ? 0.75 + Math.random() * 1.2 : 0.4 + Math.random() * 0.9;
-      const dist = spawnBurst(sys, room, playerPos.x, playerPos.z);
-      let dist2 = -1;
-      if (Math.random() < 0.5) dist2 = spawnBurst(sys, room, playerPos.x, playerPos.z);
-      const near = dist >= 0 && dist < 11 ? dist : dist2;
-      if (near >= 0 && near < 11 && sys.onBurst && Math.random() < 0.5) {
-        sys.onBurst(near);
+      const mons = opts.monitors || null;
+      const a = spawnBurst(sys, room, playerPos.x, playerPos.z, mons);
+      const b = Math.random() < 0.5
+        ? spawnBurst(sys, room, playerPos.x, playerPos.z, mons)
+        : null;
+      const hit = a && a.dist >= 0 && a.dist < 11 ? a : (b && b.dist >= 0 && b.dist < 11 ? b : null);
+      if (hit && sys.onBurst && (hit.monitor || Math.random() < 0.5)) {
+        sys.onBurst(hit);
       }
     }
   } else if (sys.wait < 0.45) {

@@ -14,6 +14,8 @@ export class HubHaloHum {
     this._gain = null;
     /** @type {OscillatorNode | null} */
     this._drone = null;
+    /** @type {GainNode | null} */
+    this._droneG = null;
     /** @type {OscillatorNode | null} */
     this._fifth = null;
     /** @type {OscillatorNode | null} */
@@ -38,28 +40,29 @@ export class HubHaloHum {
 
     const drone = ctx.createOscillator();
     drone.type = "sine";
-    drone.frequency.value = 132;
+    drone.frequency.value = 118;
     this._drone = drone;
     const dg = ctx.createGain();
-    dg.gain.value = 0.48;
+    dg.gain.value = 0.28;
+    this._droneG = dg;
     drone.connect(dg);
     dg.connect(master);
 
     const fifth = ctx.createOscillator();
     fifth.type = "sine";
-    fifth.frequency.value = 198;
+    fifth.frequency.value = 176;
     this._fifth = fifth;
     const fg = ctx.createGain();
-    fg.gain.value = 0.16;
+    fg.gain.value = 0.09;
     fifth.connect(fg);
     fg.connect(master);
 
     const shimmer = ctx.createOscillator();
-    shimmer.type = "triangle";
-    shimmer.frequency.value = 680;
+    shimmer.type = "sine";
+    shimmer.frequency.value = 520;
     this._shimmer = shimmer;
     const sg = ctx.createGain();
-    sg.gain.value = 0.06;
+    sg.gain.value = 0.03;
     this._shimmerG = sg;
     const slp = ctx.createBiquadFilter();
     slp.type = "lowpass";
@@ -99,7 +102,7 @@ export class HubHaloHum {
     bp.Q.value = 0.65;
     this._airBp = bp;
     const ng = ctx.createGain();
-    ng.gain.value = 0.26;
+    ng.gain.value = 0.12;
     src.connect(hp);
     hp.connect(bp);
     bp.connect(ng);
@@ -129,46 +132,51 @@ export class HubHaloHum {
     }
     this._level += (target - this._level) * Math.min(1, dt * 3.2);
 
-    this._wander += (Math.random() - 0.5) * dt * 5.5;
-    this._wander *= Math.max(0.84, 1 - dt * 1.8);
-    this._wander2 += (Math.random() - 0.5) * dt * 3.2;
-    this._wander2 *= Math.max(0.88, 1 - dt * 1.2);
+    this._wander += (Math.random() - 0.5) * dt * 7.2;
+    this._wander *= Math.max(0.8, 1 - dt * 1.4);
+    this._wander2 += (Math.random() - 0.5) * dt * 4.4;
+    this._wander2 *= Math.max(0.82, 1 - dt * 1.05);
 
     const now = t || 0;
     const wobble =
-      Math.sin(now * 0.62) * 0.45 +
-      Math.sin(now * 1.41) * 0.28 +
-      Math.sin(now * 0.19) * 0.35 +
+      Math.sin(now * 0.37) * 0.7 +
+      Math.sin(now * 0.91) * 0.42 +
+      Math.sin(now * 0.13) * 0.55 +
+      Math.sin(now * 2.3) * 0.18 +
       this._wander;
     const twinkle =
-      Math.sin(now * 2.05) * 0.5 +
-      Math.sin(now * 5.15) * 0.22 +
-      this._wander2 * 0.6;
-    const breath = 0.7 + 0.3 * (0.5 + 0.5 * Math.sin(now * 0.48 + wobble * 0.4));
-    this._gain.gain.value = this._level * 0.072 * breath;
+      Math.sin(now * 1.15) * 0.45 +
+      Math.sin(now * 3.4) * 0.2 +
+      this._wander2 * 0.85;
+    const swell = 0.28 + 0.72 * (0.5 + 0.5 * Math.sin(now * 0.17 + wobble * 0.15));
+    const dip = 0.55 + 0.45 * (0.5 + 0.5 * Math.sin(now * 0.29 + 1.2));
+    this._gain.gain.value = this._level * 0.034 * swell * dip;
 
-    const u = ((now / 13.2) % 1 + 1) % 1;
-    const pingA = Math.max(0, 1 - u * 4.2);
-    const pingB = Math.max(0, 1 - ((u + 0.42) % 1) * 4.2);
-    const ping = Math.max(pingA, pingB);
+    const u = ((now / 9.4) % 1 + 1) % 1;
+    const pingA = Math.max(0, 1 - u * 5.5);
+    const pingB = Math.max(0, 1 - ((u + 0.58) % 1) * 6.2);
+    const ping = Math.max(pingA, pingB * 0.65);
 
     if (this._drone) {
-      this._drone.frequency.value = 126 + wobble * 26 + ping * 12;
+      this._drone.frequency.value = 104 + wobble * 38 + ping * 18 + Math.sin(now * 0.07) * 10;
+    }
+    if (this._droneG) {
+      this._droneG.gain.value = 0.16 + (0.5 + 0.5 * Math.sin(now * 0.23 + wobble)) * 0.16;
     }
     if (this._fifth) {
-      this._fifth.frequency.value = 188 + wobble * 16 + Math.sin(now * 0.91) * 8;
+      this._fifth.frequency.value = 156 + wobble * 28 + Math.sin(now * 0.61) * 14;
     }
     if (this._shimmer) {
-      this._shimmer.frequency.value = 640 + this._level * 90 + twinkle * 110 + ping * 50;
+      this._shimmer.frequency.value = 470 + this._level * 40 + twinkle * 160 + ping * 70;
     }
     if (this._shimmerG) {
-      this._shimmerG.gain.value = 0.035 + (0.5 + 0.5 * Math.sin(now * 1.7 + twinkle)) * 0.055;
+      this._shimmerG.gain.value = 0.012 + (0.5 + 0.5 * Math.sin(now * 0.8 + twinkle)) * 0.028;
     }
     if (this._pingG) {
-      this._pingG.gain.value = 0.0001 + ping * ping * 0.09;
+      this._pingG.gain.value = 0.0001 + ping * ping * 0.045;
     }
     if (this._airBp) {
-      this._airBp.frequency.value = 780 + wobble * 220 + ping * 180 + Math.sin(now * 0.88) * 140;
+      this._airBp.frequency.value = 620 + wobble * 280 + ping * 120 + Math.sin(now * 0.44) * 180;
     }
   }
 }

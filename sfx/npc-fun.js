@@ -8,14 +8,13 @@ function rand(a, b) {
   return a + Math.random() * (b - a);
 }
 
-/** Soft CRT blip when a think-dot appears. Pitch steps with 1 / 2 / 3 dots. */
+/** Soft CRT blip when a think-dot appears. Pitch is a fresh random each tick. */
 export function playThinkDot(count = 1) {
   const ctx = getAudioCtx();
   if (!ctx) return;
   void resumeAudio();
   const t0 = ctx.currentTime;
-  const n = Math.max(1, Math.min(3, count | 0));
-  const hz = 720 + n * 220;
+  const hz = rand(420, 1480);
 
   const master = ctx.createGain();
   master.gain.value = 1;

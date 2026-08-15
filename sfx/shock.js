@@ -4,87 +4,77 @@
 
 import { getAudioCtx, resumeAudio } from "./ctx.js";
 
-function noiseBuffer(ctx, seconds = 0.28) {
+/** Cached raw white noise — generate once, reuse. */
+let _whiteBuf = null;
+function whiteNoise(ctx, seconds = 0.5) {
+  if (_whiteBuf && _whiteBuf.sampleRate === ctx.sampleRate) return _whiteBuf;
   const n = Math.max(1, Math.floor(ctx.sampleRate * seconds));
   const buf = ctx.createBuffer(1, n, ctx.sampleRate);
   const data = buf.getChannelData(0);
-  let b0 = 0;
-  for (let i = 0; i < n; i++) {
-    const white = Math.random() * 2 - 1;
-    b0 = 0.82 * b0 + white * 0.35;
-    const crackle = Math.random() > 0.82 ? white * 1.4 : white * 0.35;
-    data[i] = (b0 + crackle) * (1 - i / n);
-  }
+  for (let i = 0; i < n; i++) data[i] = Math.random() * 2 - 1;
+  _whiteBuf = buf;
   return buf;
 }
 
-/** Sustained electric-shock buzz when the south force field kicks. */
-export function playElectricShock() {
+function noiseBuffer(ctx, seconds = 0.28) {
+  return whiteNoise(ctx, Math.max(seconds, 0.5));
+}
+
+/** Gated / filtered white-noise spark. Cheap: 1 source, 2 filters, 1 LFO. */
+function playGatedNoiseSpark({
+  dur = 0.28,
+  amp = 0.1,
+  hpHz = 900,
+  bp0 = 2600,
+  bp1 = 1100,
+  gateHz = 24,
+} = {}) {
   const ctx = getAudioCtx();
   if (!ctx) return;
   void resumeAudio();
-
   const t0 = ctx.currentTime;
-  const dur = 0.62;
-  const master = ctx.createGain();
-  master.gain.value = 1;
-  master.connect(ctx.destination);
-
-  // Mains-like buzz (square + saw) with a slight pitch wobble
-  const buzz = ctx.createOscillator();
-  buzz.type = "square";
-  buzz.frequency.setValueAtTime(118, t0);
-  buzz.frequency.linearRampToValueAtTime(132, t0 + 0.18);
-  buzz.frequency.linearRampToValueAtTime(108, t0 + dur);
-  const buzz2 = ctx.createOscillator();
-  buzz2.type = "sawtooth";
-  buzz2.frequency.setValueAtTime(59, t0);
-  buzz2.frequency.linearRampToValueAtTime(64, t0 + dur);
-  const bp = ctx.createBiquadFilter();
-  bp.type = "bandpass";
-  bp.frequency.setValueAtTime(720, t0);
-  bp.frequency.linearRampToValueAtTime(980, t0 + 0.2);
-  bp.frequency.linearRampToValueAtTime(540, t0 + dur);
-  bp.Q.value = 1.4;
-  const bg = ctx.createGain();
-  bg.gain.setValueAtTime(0.0001, t0);
-  bg.gain.exponentialRampToValueAtTime(0.085, t0 + 0.018);
-  bg.gain.setValueAtTime(0.07, t0 + 0.22);
-  bg.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-  buzz.connect(bp);
-  buzz2.connect(bp);
-  bp.connect(bg);
-  bg.connect(master);
-  buzz.start(t0);
-  buzz2.start(t0);
-  buzz.stop(t0 + dur + 0.02);
-  buzz2.stop(t0 + dur + 0.02);
-
-  // Tremolo so it reads as bzzzz not a tone
-  const lfo = ctx.createOscillator();
-  lfo.type = "square";
-  lfo.frequency.value = 28;
-  const lfoG = ctx.createGain();
-  lfoG.gain.value = 0.045;
-  lfo.connect(lfoG);
-  lfoG.connect(bg.gain);
-  lfo.start(t0);
-  lfo.stop(t0 + dur);
-
-  // High fizz / crackle
   const src = ctx.createBufferSource();
-  src.buffer = noiseBuffer(ctx, dur);
+  src.buffer = whiteNoise(ctx);
+  src.loop = true;
   const hp = ctx.createBiquadFilter();
   hp.type = "highpass";
-  hp.frequency.value = 1600;
-  const ng = ctx.createGain();
-  ng.gain.setValueAtTime(0.0001, t0);
-  ng.gain.exponentialRampToValueAtTime(0.09, t0 + 0.01);
-  ng.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  hp.frequency.value = hpHz;
+  const bp = ctx.createBiquadFilter();
+  bp.type = "bandpass";
+  bp.Q.value = 0.85;
+  bp.frequency.setValueAtTime(bp0, t0);
+  bp.frequency.exponentialRampToValueAtTime(Math.max(200, bp1), t0 + dur);
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(amp, t0 + 0.006);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  const lfo = ctx.createOscillator();
+  lfo.type = "square";
+  lfo.frequency.value = gateHz;
+  const lfoG = ctx.createGain();
+  lfoG.gain.value = amp * 0.55;
+  lfo.connect(lfoG);
+  lfoG.connect(g.gain);
   src.connect(hp);
-  hp.connect(ng);
-  ng.connect(master);
+  hp.connect(bp);
+  bp.connect(g);
+  g.connect(ctx.destination);
   src.start(t0);
+  src.stop(t0 + dur);
+  lfo.start(t0);
+  lfo.stop(t0 + dur);
+}
+
+/** Force-field hit — white noise, band-sweep, square gate. */
+export function playElectricShock() {
+  playGatedNoiseSpark({
+    dur: 0.36,
+    amp: 0.12,
+    hpHz: 700,
+    bp0: 2800,
+    bp1: 850,
+    gateHz: 21,
+  });
 }
 
 /** Machine digital glitch layered on the south-field bounce. */
@@ -275,47 +265,28 @@ export function playGlassDenied() {
   buzz.stop(t0 + 0.14);
 }
 
+/** Quiet bezel tick for SOS wall-monitor sparks. */
+export function playMonitorSpark(gain = 1) {
+  const g = Math.max(0.25, Math.min(1, gain));
+  playGatedNoiseSpark({
+    dur: 0.09,
+    amp: 0.028 * g,
+    hpHz: 1600,
+    bp0: 3200 + Math.random() * 600,
+    bp1: 1400,
+    gateHz: 36,
+  });
+}
+
 /** Quiet fixture crackle for SOS ceiling sparks. */
 export function playCeilingSpark(gain = 1) {
-  const ctx = getAudioCtx();
-  if (!ctx) return;
-  void resumeAudio();
-
-  const t0 = ctx.currentTime;
-  const amp = 0.012 * Math.max(0.25, Math.min(1, gain));
-  const master = ctx.createGain();
-  master.gain.value = 1;
-  master.connect(ctx.destination);
-
-  const src = ctx.createBufferSource();
-  src.buffer = noiseBuffer(ctx, 0.09);
-  const hp = ctx.createBiquadFilter();
-  hp.type = "highpass";
-  hp.frequency.value = 2200;
-  const bp = ctx.createBiquadFilter();
-  bp.type = "bandpass";
-  bp.frequency.value = 3600;
-  bp.Q.value = 1.1;
-  const ng = ctx.createGain();
-  ng.gain.setValueAtTime(0.0001, t0);
-  ng.gain.exponentialRampToValueAtTime(amp, t0 + 0.004);
-  ng.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.09);
-  src.connect(hp);
-  hp.connect(bp);
-  bp.connect(ng);
-  ng.connect(master);
-  src.start(t0);
-
-  const tick = ctx.createOscillator();
-  tick.type = "square";
-  tick.frequency.setValueAtTime(2100 + Math.random() * 900, t0);
-  tick.frequency.exponentialRampToValueAtTime(420, t0 + 0.05);
-  const tg = ctx.createGain();
-  tg.gain.setValueAtTime(0.0001, t0);
-  tg.gain.exponentialRampToValueAtTime(amp * 0.7, t0 + 0.003);
-  tg.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.055);
-  tick.connect(tg);
-  tg.connect(master);
-  tick.start(t0);
-  tick.stop(t0 + 0.07);
+  const g = Math.max(0.25, Math.min(1, gain));
+  playGatedNoiseSpark({
+    dur: 0.1,
+    amp: 0.022 * g,
+    hpHz: 2000,
+    bp0: 3800,
+    bp1: 1600,
+    gateHz: 32,
+  });
 }
