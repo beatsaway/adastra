@@ -8034,6 +8034,7 @@ function makeForceFieldFence(room, anim, { localX = 0, localZ, gw, h }) {
   const w = holeW * 0.92;
   const rows = 6;
   const span = holeH * 0.72;
+  const bars = [];
   for (let i = 0; i < rows; i++) {
     const y = -span / 2 + (span / (rows - 1)) * i;
     const bar = new THREE.Mesh(new THREE.PlaneGeometry(w, 0.055), mat);
@@ -8042,15 +8043,26 @@ function makeForceFieldFence(room, anim, { localX = 0, localZ, gw, h }) {
     bar.receiveShadow = false;
     bar.renderOrder = 3;
     g.add(bar);
+    bars.push(bar);
   }
-  anim.southGate.fence = { mesh: g, mat };
+  anim.southGate.fence = { mesh: g, mat, bars, t: 0 };
   return g;
 }
 
-function updateForceFieldFence(gate, open) {
+function updateForceFieldFence(gate, open, dt) {
   const fence = gate?.fence;
   if (!fence?.mesh) return;
   fence.mesh.visible = !open;
+  const bars = fence.bars;
+  if (open || !bars || !bars.length) return;
+  fence.t += dt;
+  const n = bars.length;
+  const wave = (fence.t * 3.6) % (n + 0.85);
+  for (let i = 0; i < n; i++) {
+    const d = Math.abs(i - wave);
+    const k = d < 1.2 ? 1 - d / 1.2 : 0;
+    bars[i].scale.y = 0.4 + k * k * 2.2;
+  }
 }
 
 /**
@@ -8062,7 +8074,7 @@ export function updateSouthCorridorGate(anim, player, dt) {
   if (!anim.southGate) anim.southGate = { toss: null };
   const gate = anim.southGate;
   const open = isInfoHubDebugged(anim);
-  updateForceFieldFence(gate, open);
+  updateForceFieldFence(gate, open, dt);
 
   if (open) {
     if (gate.toss) {
