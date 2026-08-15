@@ -1441,6 +1441,11 @@ function roomShell(colliders, group, {
           colliders, locked: roomDoorLocked(label), side, roomLabel: label,
         });
       }
+      if (anim && /hub/i.test(String(label || "")) && side === "s") {
+        makeForceFieldFence(room, anim, {
+          localX: 0, localZ: z, gw, h,
+        });
+      }
     }
   }
 
@@ -5248,16 +5253,16 @@ function makeBed(group, x, y, z, rotY = 0, tones = {}, interactables = null, roo
 
   // pale glass sleep capsule — unique mat so hover doesn't light every bunk
   const shieldMat = new THREE.MeshStandardMaterial({
-    color: 0xd8e2ec,
-    metalness: 0.12,
-    roughness: 0.16,
-    transparent: true,
-    opacity: 0.72,
+      color: 0xd8e2ec,
+      metalness: 0.12,
+      roughness: 0.16,
+      transparent: true,
+      opacity: 0.72,
     emissive: 0xb8d4ea,
     emissiveIntensity: 0.08,
-    side: THREE.DoubleSide,
-    depthWrite: false,
-  });
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
   const pod = new THREE.Group();
   // CapsuleGeometry is Y-up; rotate onto Z so it runs along the bunk
   const radius = 0.8;
@@ -5564,26 +5569,26 @@ function makeStove(group, x, y, z, rotY = 0, interactables = null, roomOx = 0, r
   g.add(box(0.35, 0.55, 0.32, body, 0, 2.7, -0.2));
 
   const stoveAct = {
-    kind: "stove",
-    on: false,
-    burnerMat,
-    position: new THREE.Vector3(roomOx + x, 1.0, roomOz + z),
-    radius: 2.4,
-    prompt() {
-      return this.on ? "Press E · Turn stove off" : "Press E · Turn stove on";
-    },
-    toggle() {
-      this.on = !this.on;
-      if (this.on) {
-        this.burnerMat.color.setHex(0xff6622);
-        this.burnerMat.emissive.setHex(0xff4411);
-        this.burnerMat.emissiveIntensity = 0.65;
-      } else {
-        this.burnerMat.color.setHex(0x6a7078);
-        this.burnerMat.emissive.setHex(0x000000);
-        this.burnerMat.emissiveIntensity = 0;
-      }
-    },
+      kind: "stove",
+      on: false,
+      burnerMat,
+      position: new THREE.Vector3(roomOx + x, 1.0, roomOz + z),
+      radius: 2.4,
+      prompt() {
+        return this.on ? "Press E · Turn stove off" : "Press E · Turn stove on";
+      },
+      toggle() {
+        this.on = !this.on;
+        if (this.on) {
+          this.burnerMat.color.setHex(0xff6622);
+          this.burnerMat.emissive.setHex(0xff4411);
+          this.burnerMat.emissiveIntensity = 0.65;
+        } else {
+          this.burnerMat.color.setHex(0x6a7078);
+          this.burnerMat.emissive.setHex(0x000000);
+          this.burnerMat.emissiveIntensity = 0;
+        }
+      },
   };
   g.userData.toggle = () => stoveAct.toggle();
   g.userData.stand = { x: roomOx + x, z: roomOz + z + 0.95, face: Math.PI };
@@ -6163,13 +6168,13 @@ function makeStallBank(room, colliders, interactables, roomOx, roomOz, {
       if (special) {
         makeToilet(g, slotX, 0, slotZ, 0, {
           special: true,
-          interactables,
-          roomOx,
-          roomOz,
-          bankCx: cx,
-          bankCz: cz,
-          bankRotY: rotY,
-        });
+        interactables,
+        roomOx,
+        roomOz,
+        bankCx: cx,
+        bankCz: cz,
+        bankRotY: rotY,
+      });
       }
       makeLooRoll(g, slotX + stallW * 0.5 - 0.03, 0.95, -depth * 0.08);
       if (slotsOut) {
@@ -6970,11 +6975,11 @@ function makeBigScreen(group, anim, x, y, z, w, h, rotY = 0, opts = {}) {
   for (let i = 0; i < segments.length; i++) {
     const s = segments[i];
     const ringMat = new THREE.MeshBasicMaterial({
-      color: i % 2 ? 0x66ffcc : 0x44aaff,
-      side: THREE.DoubleSide,
-      transparent: true,
-      opacity: 0.7,
-      depthWrite: false,
+        color: i % 2 ? 0x66ffcc : 0x44aaff,
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: 0.7,
+        depthWrite: false,
     });
     ringMats.push(ringMat);
     const seg = new THREE.Mesh(
@@ -7986,6 +7991,40 @@ function isInfoHubDebugged(anim) {
   return mons.length > 0 && mons.every((m) => m.debugged);
 }
 
+/** Cyan laser bars in the same hole a south-hub door would use. */
+function makeForceFieldFence(room, anim, { localX = 0, localZ, gw, h }) {
+  if (!anim) return null;
+  if (!anim.southGate) anim.southGate = { toss: null };
+  if (anim.southGate.fence?.mesh) return anim.southGate.fence.mesh;
+  const { holeW, holeH, holeY } = doorOpeningMetrics(gw, h);
+  const g = new THREE.Group();
+  g.position.set(localX, holeY, localZ);
+  room.add(g);
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0x00ffff,
+    toneMapped: false,
+  });
+  const w = holeW * 0.9;
+  const rows = 6;
+  const span = holeH * 0.72;
+  for (let i = 0; i < rows; i++) {
+    const y = -span / 2 + (span / (rows - 1)) * i;
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(w, 0.07, 0.08), mat);
+    bar.position.set(0, y, 0);
+    bar.castShadow = false;
+    bar.receiveShadow = false;
+    g.add(bar);
+  }
+  anim.southGate.fence = { mesh: g, mat };
+  return g;
+}
+
+function updateForceFieldFence(gate, open) {
+  const fence = gate?.fence;
+  if (!fence?.mesh) return;
+  fence.mesh.visible = !open;
+}
+
 /**
  * Deny south corridor until Info Hub is debugged: parabola-arc the player to the north corridor.
  * @returns {boolean} true on the frame a toss starts (for deny SFX + VO)
@@ -7995,6 +8034,7 @@ export function updateSouthCorridorGate(anim, player, dt) {
   if (!anim.southGate) anim.southGate = { toss: null };
   const gate = anim.southGate;
   const open = isInfoHubDebugged(anim);
+  updateForceFieldFence(gate, open);
 
   if (open) {
     if (gate.toss) {
@@ -8247,7 +8287,7 @@ export function buildShip(scene) {
   decorateWallMonitors(hub, anim, [
     [-5.25, 2.2, -3.35, Math.PI / 2, 2.2, 1.35],
   ]);
-  anim.southGate = { toss: null };
+  anim.southGate = { toss: null, fence: anim.southGate?.fence || null };
   styleRoomLighting(hub, "hub");
   enableSos(hub, anim);
   // NPC patrols disabled for now (unlock later)
