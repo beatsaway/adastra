@@ -8056,12 +8056,14 @@ function updateForceFieldFence(gate, open, dt) {
   const bars = fence.bars;
   if (open || !bars || !bars.length) return;
   fence.t += dt;
-  const n = bars.length;
-  const wave = (fence.t * 3.6) % (n + 0.85);
-  for (let i = 0; i < n; i++) {
-    const d = Math.abs(i - wave);
-    const k = d < 1.2 ? 1 - d / 1.2 : 0;
-    bars[i].scale.y = 0.4 + k * k * 2.2;
+  const t = fence.t;
+  for (let i = 0; i < bars.length; i++) {
+    const a = Math.sin(t * 6.7 + i * 2.17);
+    const b = Math.sin(t * 3.1 + i * 5.83);
+    const c = Math.sin(t * 14.2 + i * 1.37);
+    const k = a * 0.45 + b * 0.32 + c * 0.23;
+    const u = k * 0.5 + 0.5;
+    bars[i].scale.y = 0.32 + u * u * 2.15;
   }
 }
 
