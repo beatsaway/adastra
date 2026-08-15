@@ -1,9 +1,9 @@
 import * as THREE from "three";
-import { shipVoice } from "./ai-voice.js?v=20260815cj";
-import { pickNpcChitchatLine } from "./npc-chitchat.js?v=20260815cs";
-import { playThinkDot, playNpcBonk } from "../sfx/npc-fun.js?v=20260815cp";
+import { shipVoice } from "./ai-voice.js?v=20260815dr";
+import { pickNpcChitchatLine } from "./npc-chitchat.js?v=20260815ds";
+import { playThinkDot, playNpcBonk, playNpcGearFrenzy } from "../sfx/npc-fun.js?v=20260815ds";
 import { playBriefStart } from "../sfx/brief.js";
-import { isDoorUnlocked as isDoorAlreadyUnlocked, markDoorUnlocked, DOOR_UNLOCK_COST, MONITOR_DEBUG_COST, isMonitorDebugged, isNpcActivated, markNpcActivated } from "./datapoints.js?v=adastra1000";
+import { isDoorUnlocked as isDoorAlreadyUnlocked, markDoorUnlocked, DOOR_UNLOCK_COST, MONITOR_DEBUG_COST, TOILET_PRINT_COST, isMonitorDebugged, isNpcActivated, markNpcActivated, getPrintedToiletCount, addPrintedToilet } from "./datapoints.js?v=20260815ei";
 
 const WALL = 0xf7f8fa;
 const FLOOR = 0xcfd5de;
@@ -927,6 +927,7 @@ function roomWantsDoor(label = "") {
     L.includes("crew quarters") ||
     L.includes("garden") ||
     L.includes("kitchen") ||
+    L.includes("diner") ||
     L.includes("engine room")
   );
 }
@@ -935,7 +936,8 @@ function roomWantsDoor(label = "") {
 function roomDoorLocked(label = "") {
   const L = label.toLowerCase();
   return (
-    L.includes("kitchen") || // diner
+    L.includes("kitchen") ||
+    L.includes("diner") ||
     L.includes("garden") ||
     L.includes("washroom") ||
     L.includes("hygiene") ||
@@ -1153,8 +1155,8 @@ function makeGlassDoor(room, doorsOut, doorKeys, {
     thickness: cockpitPane ? 0.32 : 0.55,
     ior: 1.45,
     transparent: true,
-    opacity: cockpitPane ? 0.62 : 0.92,
-    depthWrite: true,
+    opacity: cockpitPane ? 0.55 : 0.92,
+    depthWrite: !cockpitPane,
     side: THREE.DoubleSide,
   });
   glassMat.userData.doorGlass = true;
@@ -2280,8 +2282,48 @@ export function setWallMonitorSosBlend(wm, u) {
   }
 }
 
-/** Slow red → orange-red wash on undebugged SOS wall monitors (keep green low so it never reads yellow). */
-export function updateWallMonitorSosPulse(anim, t) {
+function roomDoorNeedles(label) {
+  const L = String(label || "").toLowerCase();
+  if (L.includes("garden")) return ["garden"];
+  if (L.includes("diner") || L.includes("kitchen")) return ["diner", "kitchen"];
+  if (L.includes("crew quarters") || L.includes("dorm")) return ["crew quarters", "dorm"];
+  if (L.includes("washroom") || L.includes("hygiene")) return ["washroom", "hygiene"];
+  if (L.includes("engine room")) return ["engine room"];
+  if (L.includes("cockpit") || L.includes("control")) return ["cockpit", "control"];
+  return L ? [L] : null;
+}
+
+function playerInRoomBounds(room, pos, pad = 0.55) {
+  const b = room?.userData?.bounds;
+  if (!b || !pos) return false;
+  return (
+    pos.x >= b.minX - pad &&
+    pos.x <= b.maxX + pad &&
+    pos.z >= b.minZ - pad &&
+    pos.z <= b.maxZ + pad
+  );
+}
+
+/** Animate a wall monitor when the captain is at that room's door or already inside. */
+function wallMonitorShouldAnimate(wm, playerPos, autoDoors) {
+  if (!playerPos) return true;
+  const room = wm?.room;
+  if (playerInRoomBounds(room, playerPos)) return true;
+  const needles = roomDoorNeedles(room?.userData?.label);
+  if (!needles) return false;
+  const r2 = 3.45 * 3.45;
+  for (let i = 0; i < (autoDoors || []).length; i++) {
+    const d = autoDoors[i];
+    if (!d?.trigger) continue;
+    const L = String(d.roomLabel || "").toLowerCase();
+    if (!needles.some((n) => L.includes(n))) continue;
+    if (nearDoorTrigger(playerPos, d, r2)) return true;
+  }
+  return false;
+}
+
+/** SOS color wash + fake UI bars/rings — only for rooms the captain is entering. */
+export function updateWallMonitorSosPulse(anim, t, playerPos = null, autoDoors = null) {
   const mons = anim?.wallMonitors;
   if (!mons?.length) return;
   // ~12s full cycle (sin period 2π / 0.52)
@@ -2289,8 +2331,22 @@ export function updateWallMonitorSosPulse(anim, t) {
   const waveB = (Math.sin(t * 0.52 + 0.85) + 1) * 0.5;
   for (let i = 0; i < mons.length; i++) {
     const wm = mons[i];
-    if (!wm || wm.repairing || wm.debugged) continue;
-    if (wm.room?.userData?.lightMode !== "sos") continue;
+    if (!wm || wm.repairing) continue;
+    if (!wallMonitorShouldAnimate(wm, playerPos, autoDoors)) continue;
+    const bars = wm.barMeshes || [];
+    for (let b = 0; b < bars.length; b++) {
+      const mesh = bars[b];
+      if (!mesh?.visible) continue;
+      mesh.scale.x = 0.55 + 0.45 * Math.abs(Math.sin(t * 2.2 + (i * 5 + b) * 0.7));
+    }
+    const rings = wm.ringMeshes || [];
+    for (let k = 0; k < rings.length; k++) {
+      const r = rings[k];
+      if (!r) continue;
+      const speed = r.userData.spinSpeed ?? (0.35 + k * 0.4) * (k % 2 ? -1 : 1);
+      r.rotation.z = t * speed;
+    }
+    if (wm.debugged || wm.room?.userData?.lightMode !== "sos") continue;
     const p = (Math.sin(t * 0.52 + i * 0.35) + 1) * 0.5;
     // 0 = blood red · 1 = orange-red (green capped so emissive doesn't bloom yellow)
     const g = 0.035 + p * 0.185;
@@ -2424,6 +2480,7 @@ export function resetAllRoomSos(anim) {
   }
   anim.sosActive = true;
   anim.pendingSosRestore = [];
+  syncToiletPrintHolo(anim);
 }
 
 function monitorIdForRoom(room) {
@@ -2449,6 +2506,8 @@ function registerWallMonitor(anim, room, group, mats, holoOpts = {}) {
     screenMat: mats.screenMat || null,
     barMats: mats.barMats || [],
     ringMats: mats.ringMats || [],
+    barMeshes: mats.barMeshes || [],
+    ringMeshes: mats.ringMeshes || [],
     underGlowMat: mats.underGlowMat || null,
     debugHolo: null,
   };
@@ -2467,20 +2526,136 @@ export function attachWallMonitorInteractables() {
  * Mark monitor debugged; if room's last orange panel clears, exit SOS.
  * Returns { roomCleared, roomName } when the room returns to normal.
  */
+function isCockpitMonitorRoom(room) {
+  const L = String(room?.userData?.label || "").toLowerCase();
+  return L.includes("cockpit") || L.includes("control");
+}
+
+export function wallMonitorsInSameRoom(wm, anim) {
+  const room = wm?.room;
+  if (!room) return wm ? [wm] : [];
+  return (anim?.wallMonitors || []).filter((m) => m.room === room);
+}
+
+/** Cockpit: one panel restores the whole room. */
+export function roomDebugClearsAll(wm) {
+  return isCockpitMonitorRoom(wm?.room);
+}
+
 export function debugWallMonitor(wm, anim) {
   if (!wm || wm.debugged) return { roomCleared: false, roomName: "" };
-  wm.debugged = true;
-  applyWallMonitorVisual(wm);
   const room = wm.room;
   const roomName = room?.userData?.label || "this room";
-  const siblings = (anim?.wallMonitors || []).filter((m) => m.room === room);
+  const siblings = wallMonitorsInSameRoom(wm, anim);
+  const batch = roomDebugClearsAll(wm) ? siblings : [wm];
+  for (const m of batch) {
+    m.debugged = true;
+    m.repairing = false;
+    applyWallMonitorVisual(m);
+    if (m.debugHolo) m.debugHolo.visible = false;
+  }
   const allDone = siblings.length > 0 && siblings.every((m) => m.debugged);
   if (allDone && room?.userData?.lightMode === "sos") {
     clearSosLighting(room, anim);
     refreshAllWallMonitors(anim);
+    syncToiletPrintHolo(anim);
     return { roomCleared: true, roomName };
   }
+  syncToiletPrintHolo(anim);
   return { roomCleared: false, roomName };
+}
+
+export function toiletSlotsLeft(anim) {
+  return (anim?.toiletSlots || []).filter((s) => !s.filled).length;
+}
+
+function spawnToiletInSlot(slot) {
+  if (!slot || slot.filled) return null;
+  const g = makeToilet(slot.group, slot.slotX, 0, slot.z, 0, { special: false });
+  g.userData.printedToilet = true;
+  slot.toilet = g;
+  slot.filled = true;
+  slot.printed = true;
+  return g;
+}
+
+export function printToiletInWashroom(anim) {
+  const slot = (anim?.toiletSlots || []).find((s) => !s.filled);
+  if (!slot) return false;
+  spawnToiletInSlot(slot);
+  addPrintedToilet();
+  syncToiletPrintHolo(anim);
+  return true;
+}
+
+export function resetPrintedToilets(anim) {
+  for (const slot of anim?.toiletSlots || []) {
+    if (!slot.printed) continue;
+    slot.toilet?.parent?.remove(slot.toilet);
+    slot.toilet = null;
+    slot.filled = false;
+    slot.printed = false;
+  }
+  syncToiletPrintHolo(anim);
+}
+
+function restorePrintedToilets(anim) {
+  const n = getPrintedToiletCount();
+  let made = 0;
+  for (const slot of anim?.toiletSlots || []) {
+    if (made >= n) break;
+    if (slot.filled) continue;
+    spawnToiletInSlot(slot);
+    made += 1;
+  }
+}
+
+function makeToiletPrintHolo() {
+  const lines = ["3D print a toilet", TOILET_PRINT_COST + " data points · +2 crew capacity"];
+  const cyan = makeHoloLinesTexture(lines, {
+    fill: "#66e0ff",
+    shadow: "rgba(20, 120, 160, 0.9)",
+    fontPx: 44,
+  });
+  const bright = makeHoloLinesTexture(lines, {
+    fill: "#dff8ff",
+    shadow: "rgba(80, 200, 230, 0.95)",
+    fontPx: 44,
+  });
+  const aspect = Math.max(0.5, cyan.aspect || 1.8);
+  let planeH = 0.42;
+  let planeW = planeH * aspect;
+  if (planeW > 1.7) {
+    planeW = 1.7;
+    planeH = planeW / aspect;
+  }
+  const mat = new THREE.MeshBasicMaterial({
+    map: cyan.tex,
+    transparent: true,
+    opacity: 0.62,
+    side: THREE.DoubleSide,
+    depthTest: true,
+    depthWrite: false,
+    toneMapped: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
+  });
+  const plane = new THREE.Mesh(new THREE.PlaneGeometry(planeW, planeH), mat);
+  plane.renderOrder = 3;
+  plane.userData.toiletPrintHolo = true;
+  plane.userData.baseMap = cyan.tex;
+  plane.userData.hoverMap = bright.tex;
+  plane.userData.baseOpacity = 0.62;
+  plane.userData.hoverOpacity = 0.98;
+  return plane;
+}
+
+export function syncToiletPrintHolo(anim) {
+  const p = anim?.toiletPrint;
+  if (!p?.holo) return;
+  const sos = p.wm?.room?.userData?.lightMode === "sos";
+  p.holo.visible = !sos && toiletSlotsLeft(anim) > 0 && !!p.wm?.debugged;
 }
 
 function makeConsole(group, x, y, z, rotY = 0) {
@@ -2650,35 +2825,6 @@ function createCrewAvatar(scale = 0.44) {
   return group;
 }
 
-function npcRoleLabel(role) {
-  return String(role || "crew").replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-function splitTwoRows(text) {
-  const parts = String(text || "").trim().split(/\s+/).filter(Boolean);
-  if (!parts.length) return ["", ""];
-  if (parts.length === 1) return [parts[0], ""];
-  if (parts.length === 2) return [parts[0], parts[1]];
-  const mid = Math.ceil(parts.length / 2);
-  return [parts.slice(0, mid).join(" "), parts.slice(mid).join(" ")];
-}
-
-function paintTwoLineTag(ctx, w, h, line1, line2, color) {
-  ctx.clearRect(0, 0, w, h);
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.shadowColor = "rgba(0,0,0,0.65)";
-  ctx.shadowBlur = 10;
-  ctx.fillStyle = color;
-  ctx.font = "bold 88px ui-sans-serif, Segoe UI, sans-serif";
-  if (line2) {
-    ctx.fillText(line1, w / 2, h * 0.34, w - 28);
-    ctx.fillText(line2, w / 2, h * 0.68, w - 28);
-  } else {
-    ctx.fillText(line1, w / 2, h / 2 + 4, w - 28);
-  }
-}
-
 function makeNpcCanvasTexture(w, h) {
   const canvas = document.createElement("canvas");
   canvas.width = w;
@@ -2701,43 +2847,22 @@ function npcLabelMaterial(tex) {
   });
 }
 
-/** Role on the back, two rows, big type. */
-function applyNpcBackTag(av) {
-  const body = av?.userData?.body;
-  if (!body || body.userData.backTag) return;
-  const s = av.userData.sleepScale || 0.4;
-  const [a, b] = splitTwoRows(npcRoleLabel(av.userData.npcRole));
-  const tw = 512;
-  const th = 256;
-  const { ctx, tex } = makeNpcCanvasTexture(tw, th);
-  paintTwoLineTag(ctx, tw, th, a, b, "#f0f4f8");
-  tex.needsUpdate = true;
-
-  const tag = roundedPlane(0.8 * s, 0.42 * s, 0.08 * s, npcLabelMaterial(tex));
-  tag.position.set(0, 0.06 * s, -0.29 * s);
-  tag.rotation.y = Math.PI;
-  tag.castShadow = false;
-  tag.receiveShadow = false;
-  body.add(tag);
-  body.userData.backTag = tag;
-}
-
 /** Printed name on the aisle-facing foot of their bunk. */
 function applyBedNamePlate(bed, name) {
   if (!bed || bed.userData.bedName || !name) return;
   const tw = 512;
-  const th = 160;
+  const th = 180;
   const { ctx, tex } = makeNpcCanvasTexture(tw, th);
   ctx.clearRect(0, 0, tw, th);
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillStyle = "#2a3340";
-  ctx.font = "bold 84px ui-sans-serif, Segoe UI, sans-serif";
-  ctx.fillText(String(name).trim(), tw / 2, th / 2 + 4, tw - 24);
+  ctx.font = "bold 86px ui-sans-serif, Segoe UI, sans-serif";
+  ctx.fillText(String(name).trim(), tw / 2, th * 0.52, tw - 24);
   tex.needsUpdate = true;
 
-  const plate = roundedPlane(1.02, 0.3, 0.05, npcLabelMaterial(tex));
-  plate.position.set(0, 0.28, 1.065);
+  const plate = roundedPlane(1.08, 0.42, 0.05, npcLabelMaterial(tex));
+  plate.position.set(0, 0.3, 1.065);
   plate.castShadow = false;
   plate.receiveShadow = false;
   bed.add(plate);
@@ -2997,10 +3122,12 @@ const CREW_ROSTER = [
   { id: "rex", name: "Rex Vale", role: "comms specialist", duty: "I'll staff the bridge consoles.", work: "cockpit" },
   { id: "mira", name: "Mira Sol", role: "archive keeper", duty: "I'll watch the Info Hub.", work: "hub" },
   { id: "jun", name: "Jun Park", role: "botanist", duty: "I'll tend the hydroponic garden.", work: "garden" },
-  { id: "tess", name: "Tess Orin", role: "chef", duty: "I'll get the diner running.", work: "kitchen" },
+  { id: "tess", name: "Tess Orin", role: "chef", duty: "I'll get the diner running.", work: "diner" },
   { id: "kai", name: "Kai Holt", role: "reactor tech", duty: "I'll report to the engine room.", work: "engine" },
   { id: "lila", name: "Lila Voss", role: "hygiene officer", duty: "I'll take the washroom watch.", work: "washroom" },
-  { id: "aden", name: "Aden Ruiz", role: "deck medic", duty: "I'll stay on crew deck.", work: "crewDeck" },
+  { id: "aden", name: "Aden Ruiz", role: "flight medic", duty: "I'll take a cockpit medical board.", work: "cockpit" },
+  { id: "sable", name: "Sable Quinn", role: "systems officer", duty: "I'll run cockpit systems.", work: "cockpit" },
+  { id: "pax", name: "Pax Reed", role: "navigator", duty: "I'll plot from the bridge.", work: "cockpit" },
 ];
 
 function resetNpcLimbLayout(av) {
@@ -3061,7 +3188,6 @@ function layCrewInBed(bed, spec, scale = 0.4) {
   av.userData.npcDuty = spec.duty;
   av.userData.npcWork = spec.work;
   av.userData.sleepScale = scale;
-  applyNpcBackTag(av);
   applyNpcChestTag(av);
   ensureNpcThinkScreen(av);
   applyBedNamePlate(bed, spec.name);
@@ -3109,10 +3235,11 @@ function workPathFor(work, aisle, npcId = "") {
   const routes = {
     cockpit: [...viaHub, hubNorth, cockDoor],
     hub: [...viaHub, { x: 2.6, z: 4.5 }],
-    garden: [...viaHub, gardenDoor, { x: -6.35, z: 8.6 }],
+    garden: [...viaHub, gardenDoor, { x: -7.4, z: 4.5 }, { x: -11.5, z: 4.5 }],
     kitchen: [...viaHub, kitchenDoor, { x: 7.4, z: 2.5 }],
-    engine: [dormLane, dormDoor, deck, engDoor, engineDoor, { x: 6.2, z: -21.2 }],
-    washroom: [dormLane, dormDoor, deck, washDoor, { x: 13.1, z: -10.25 }],
+    diner: [...viaHub, kitchenDoor, { x: 7.4, z: 2.5 }],
+    engine: [dormLane, dormDoor, deck, engDoor, engineDoor, { x: 0, z: -21.0 }, { x: 6.55, z: -21.0 }, { x: 6.55, z: -25.1 }],
+    washroom: [dormLane, dormDoor, deck, washDoor, { x: 12.4, z: -10.25 }],
     crewDeck: [dormLane, dormDoor, { x: -3.8, z: -10.25 }],
   };
   const pts = [aisle, ...(routes[work] || routes.crewDeck)];
@@ -3236,7 +3363,7 @@ function placeNpcAtWork(av, root) {
   const aisle = aisleWorldFromBed(av.userData.bed);
   const path = workPathFor(av.userData.npcWork, aisle, av.userData.npcId);
   const last = path[path.length - 1];
-  const seat = WORK_SEATS[av.userData.npcId];
+  const seat = isDinerWork(av) ? null : WORK_SEATS[av.userData.npcId];
   av.userData.sleep = null;
   if (seat) {
     poseNpcSit(av, seat);
@@ -3254,6 +3381,9 @@ function placeNpcAtWork(av, root) {
       workTarget: { x: last.x, z: last.z },
       spoke: true,
     };
+    if (av.userData.npcWork === "garden") startGardenTend(null, av, av.userData.wake);
+    if (av.userData.npcWork === "washroom") startWashMop(av, av.userData.wake);
+    if (isDinerWork(av)) startDinerJob(av, av.userData.wake, null);
   }
   const bed = av.userData.bed;
   if (bed) {
@@ -3304,6 +3434,14 @@ export function resetSleepingCrew(anim, root) {
     if (bed.userData.pod) {
       bed.userData.pod.visible = true;
       bed.userData.pod.position.y = bed.userData.closedY;
+    }
+    if (av.userData.roomba) {
+      av.userData.roomba.parent?.remove(av.userData.roomba);
+      av.userData.roomba = null;
+    }
+    if (av.userData.mop) {
+      av.userData.mop.parent?.remove(av.userData.mop);
+      av.userData.mop = null;
     }
   }
 }
@@ -3452,13 +3590,490 @@ function updateWakeAcknowledge(av, w, playerPos, dt, t, standY) {
   return true;
 }
 
+const GARDEN_SOIL = { xmin: -16.05, xmax: -6.95, zmin: 1.15, zmax: 7.85 };
+
+function clampGardenSoil(p) {
+  return {
+    x: Math.min(GARDEN_SOIL.xmax, Math.max(GARDEN_SOIL.xmin, p.x)),
+    z: Math.min(GARDEN_SOIL.zmax, Math.max(GARDEN_SOIL.zmin, p.z)),
+  };
+}
+
+function gardenLaneZ(z) {
+  return z < 4.55 ? 3.28 : 5.92;
+}
+
+function plantStandPoint(plant) {
+  const gx = plant?.wx ?? -11.5;
+  const gz = plant?.wz ?? 4.5;
+  let oz = 0.84;
+  if (gz > 6.05) oz = -0.84;
+  else if (gz > 3.85 && gz < 5.65) oz = Math.random() < 0.5 ? -0.84 : 0.84;
+  const ox = gx < -11.5 ? 0.34 : -0.34;
+  return clampGardenSoil({ x: gx + ox, z: gz + oz });
+}
+
+function queueGardenPath(w, from, stand) {
+  const pts = [];
+  const a0 = gardenLaneZ(from.z);
+  const a1 = gardenLaneZ(stand.z);
+  if (Math.abs(from.z - a0) > 0.4) pts.push(clampGardenSoil({ x: from.x, z: a0 }));
+  if (Math.abs(a0 - a1) > 0.3) {
+    const midX = (from.x + stand.x) * 0.5;
+    pts.push(clampGardenSoil({ x: midX, z: a0 }));
+    pts.push(clampGardenSoil({ x: midX, z: a1 }));
+  }
+  const last = pts[pts.length - 1] || from;
+  if (Math.abs(stand.x - last.x) > 0.25) pts.push(clampGardenSoil({ x: stand.x, z: a1 }));
+  pts.push(stand);
+  w.gardenPts = compactWalkPath(pts);
+  w.gardenPi = 0;
+}
+
+function pickNextGardenPlant(w, plants) {
+  if (!plants?.length) return null;
+  let idx = ((w.gardenPlant ?? -1) + 1 + ((Math.random() * 3) | 0)) % plants.length;
+  if (plants.length > 1 && idx === w.gardenPlant) idx = (idx + 1) % plants.length;
+  w.gardenPlant = idx;
+  return plants[idx];
+}
+
+function startGardenTend(anim, av, w) {
+  const plant = pickNextGardenPlant(w, anim?.plants);
+  w.tendPlant = plant || null;
+  w.gardenHold = 0;
+  if (!plant) {
+    w.gardenPts = [clampGardenSoil({ x: -11.5, z: 4.5 })];
+    w.gardenPi = 0;
+    return;
+  }
+  queueGardenPath(w, { x: av.position.x, z: av.position.z }, plantStandPoint(plant));
+}
+
+function triggerPlantShake(anim, plant) {
+  if (!anim || !plant) return;
+  for (let i = 0; i < (anim.plants || []).length; i++) {
+    const p = anim.plants[i];
+    if (p !== plant) resetPlantPose(p);
+  }
+  plant.animating = true;
+  plant.endT = null;
+  anim.activePlant = plant;
+}
+
+function updateGardenTend(av, w, dt, t, i, anim, playerPos) {
+  const scale = av.userData.sleepScale || 0.4;
+  const { head, leftArm, rightArm, leftLeg, rightLeg } = av.userData;
+  if (w.gardenHold <= 0 && updateWakeAcknowledge(av, w, playerPos, dt, t, scale)) return;
+
+  if (w.gardenHold > 0) {
+    w.gardenHold -= dt;
+    const plant = w.tendPlant;
+    if (plant) {
+      const face = Math.atan2(plant.wx - av.position.x, plant.wz - av.position.z);
+      av.rotation.y += wrapPi(face - av.rotation.y) * Math.min(1, 8 * dt);
+    }
+    const flap = Math.sin(t * 8.2 + i) * 0.28;
+    if (rightArm) {
+      rightArm.rotation.z = 1.15 + flap;
+      rightArm.rotation.x = -0.2;
+    }
+    if (leftArm) {
+      leftArm.rotation.z = -0.85 - flap * 0.45;
+      leftArm.rotation.x = -0.12;
+    }
+    if (head) head.rotation.x = 0.18 + Math.sin(t * 5) * 0.06;
+    av.position.y = scale + Math.abs(Math.sin(t * 7)) * 0.012;
+    if (w.gardenHold <= 0) startGardenTend(anim, av, w);
+    return;
+  }
+
+  if (!w.gardenPts?.length) startGardenTend(anim, av, w);
+  const target = w.gardenPts?.[w.gardenPi];
+  if (!target) {
+    if (w.tendPlant) triggerPlantShake(anim, w.tendPlant);
+    w.gardenHold = 2.15;
+    w.gardenPts = [];
+    if (leftLeg) leftLeg.rotation.x = 0;
+    if (rightLeg) rightLeg.rotation.x = 0;
+    return;
+  }
+  const next = clampGardenSoil(target);
+  const dx = next.x - av.position.x;
+  const dz = next.z - av.position.z;
+  const dist = Math.hypot(dx, dz);
+  if (dist < 0.2) {
+    w.gardenPi += 1;
+    return;
+  }
+  const step = Math.min(dist, 1.15 * dt);
+  const inv = 1 / dist;
+  av.position.x += dx * inv * step;
+  av.position.z += dz * inv * step;
+  const clamped = clampGardenSoil(av.position);
+  av.position.x = clamped.x;
+  av.position.z = clamped.z;
+  const face = Math.atan2(dx, dz);
+  av.rotation.y += wrapPi(face - av.rotation.y) * Math.min(1, 8 * dt);
+  w.phaseWalk = (w.phaseWalk || 0) + 6.4 * dt;
+  const swing = Math.sin(w.phaseWalk) * 0.32;
+  if (leftLeg) leftLeg.rotation.x = swing;
+  if (rightLeg) rightLeg.rotation.x = -swing;
+  if (leftArm) {
+    leftArm.rotation.x = -swing * 0.7;
+    leftArm.rotation.z = 0;
+  }
+  if (rightArm) {
+    rightArm.rotation.x = swing * 0.7;
+    rightArm.rotation.z = 0;
+  }
+  av.position.y = scale + Math.abs(Math.sin(w.phaseWalk)) * 0.016;
+}
+
+const ROOM_FLOOR_TOP = 0.12;
+
+function makeFloorRoomba() {
+  const g = new THREE.Group();
+  const body = mat(0xc5ced6, { metalness: 0.42, roughness: 0.34 });
+  const rim = mat(0x4aa8c8, {
+    metalness: 0.35,
+    roughness: 0.28,
+    emissive: 0x2288aa,
+    emissiveIntensity: 0.55,
+  });
+  const dark = mat(0x2a3238, { metalness: 0.5, roughness: 0.42 });
+  // Short hex puck — sits on the floor slab (top y=0.12), never through it
+  g.add(cyl(0.26, 0.26, 0.05, body, 0, 0.026, 0, 6));
+  g.add(cyl(0.28, 0.28, 0.016, rim, 0, 0.054, 0, 6));
+  g.add(cyl(0.055, 0.055, 0.02, rim, 0, 0.066, 0, 6));
+  g.add(cyl(0.09, 0.09, 0.01, dark, 0, 0.008, 0, 6));
+  return g;
+}
+
+function ensureNpcRoomba(av) {
+  if (!av) return null;
+  if (av.userData.mop) {
+    av.userData.mop.parent?.remove(av.userData.mop);
+    av.userData.mop = null;
+  }
+  if (av.userData.roomba) {
+    av.userData.roomba.visible = true;
+    return av.userData.roomba;
+  }
+  const bot = makeFloorRoomba();
+  const host = av.parent || av;
+  host.add(bot);
+  bot.position.set(av.position.x, ROOM_FLOOR_TOP, av.position.z);
+  av.userData.roomba = bot;
+  return bot;
+}
+
+function updateRoombaFollow(av, dt) {
+  const bot = av.userData.roomba;
+  if (!bot) return;
+  const yaw = av.rotation.y;
+  const tx = av.position.x - Math.sin(yaw) * 0.48;
+  const tz = av.position.z - Math.cos(yaw) * 0.48;
+  bot.position.x += (tx - bot.position.x) * Math.min(1, 5.5 * dt);
+  bot.position.z += (tz - bot.position.z) * Math.min(1, 5.5 * dt);
+  bot.position.y = ROOM_FLOOR_TOP;
+  bot.rotation.y += dt * 5.4;
+}
+
+function washMopPoints() {
+  return [
+    { x: 12.3, z: -10.25 },
+    { x: 15.1, z: -10.25 },
+    { x: 18.4, z: -10.25 },
+    { x: 21.0, z: -10.25 },
+    { x: 18.6, z: -9.15 },
+    { x: 15.0, z: -11.25 },
+    { x: 12.6, z: -9.2 },
+  ];
+}
+
+function startWashMop(av, w) {
+  ensureNpcRoomba(av);
+  const pts = washMopPoints();
+  let idx = ((w.mopIdx ?? -1) + 1 + ((Math.random() * 2) | 0)) % pts.length;
+  if (idx === w.mopIdx) idx = (idx + 1) % pts.length;
+  w.mopIdx = idx;
+  w.mopHold = 0;
+  w.gardenPts = [pts[idx]];
+  w.gardenPi = 0;
+}
+
+function updateWashMop(av, w, dt, t, i, playerPos) {
+  const scale = av.userData.sleepScale || 0.4;
+  const { head, leftArm, rightArm, leftLeg, rightLeg } = av.userData;
+  ensureNpcRoomba(av);
+  if (w.mopHold <= 0 && updateWakeAcknowledge(av, w, playerPos, dt, t, scale)) {
+    updateRoombaFollow(av, dt);
+    return;
+  }
+
+  if (w.mopHold > 0) {
+    w.mopHold -= dt;
+    if (head) head.rotation.x = 0.12 + Math.sin(t * 3.2) * 0.04;
+    if (leftArm) leftArm.rotation.x *= Math.max(0, 1 - 7 * dt);
+    if (rightArm) rightArm.rotation.x *= Math.max(0, 1 - 7 * dt);
+    av.position.y = scale + Math.abs(Math.sin(t * 5)) * 0.008;
+    updateRoombaFollow(av, dt);
+    if (w.mopHold <= 0) startWashMop(av, w);
+    return;
+  }
+
+  if (!w.gardenPts?.length) startWashMop(av, w);
+  const target = w.gardenPts?.[w.gardenPi];
+  if (!target) {
+    w.mopHold = 1.15 + Math.random() * 0.55;
+    w.gardenPts = [];
+    if (leftLeg) leftLeg.rotation.x = 0;
+    if (rightLeg) rightLeg.rotation.x = 0;
+    updateRoombaFollow(av, dt);
+    return;
+  }
+  const dx = target.x - av.position.x;
+  const dz = target.z - av.position.z;
+  const dist = Math.hypot(dx, dz);
+  if (dist < 0.2) {
+    w.gardenPi += 1;
+    updateRoombaFollow(av, dt);
+    return;
+  }
+  const step = Math.min(dist, 1.05 * dt);
+  const inv = 1 / dist;
+  av.position.x += dx * inv * step;
+  av.position.z += dz * inv * step;
+  av.rotation.y += wrapPi(Math.atan2(dx, dz) - av.rotation.y) * Math.min(1, 8 * dt);
+  w.phaseWalk = (w.phaseWalk || 0) + 6.1 * dt;
+  const gait = Math.sin(w.phaseWalk) * 0.3;
+  if (leftLeg) leftLeg.rotation.x = gait;
+  if (rightLeg) rightLeg.rotation.x = -gait;
+  if (leftArm) {
+    leftArm.rotation.x = -gait * 0.45;
+    leftArm.rotation.z = 0;
+  }
+  if (rightArm) {
+    rightArm.rotation.x = gait * 0.45;
+    rightArm.rotation.z = 0;
+  }
+  av.position.y = scale + Math.abs(Math.sin(w.phaseWalk)) * 0.014;
+  updateRoombaFollow(av, dt);
+}
+
+function isDinerWork(av) {
+  const work = av?.userData?.npcWork;
+  return work === "diner" || work === "kitchen";
+}
+
+function dinerPatrolPts() {
+  return [
+    { x: 7.3, z: 4.6 },
+    { x: 7.7, z: 7.0 },
+    { x: 9.5, z: 6.3 },
+    { x: 12.3, z: 2.15 },
+    { x: 8.5, z: 2.7 },
+    { x: 10.2, z: 3.4 },
+  ];
+}
+
+function startDinerJob(av, w, anim, forced) {
+  if (av.userData.state === "sitting" || w.dinerSit) {
+    poseNpcStand(av, av.position.x, av.position.z, av.rotation.y);
+    av.userData.state = "awake";
+    w.dinerSit = false;
+    w.phase = "work";
+  }
+  const jobs = ["sit", "patrol", "stove", "wash"].filter((j) => j !== w.dinerJob);
+  w.dinerJob = forced || jobs[(Math.random() * jobs.length) | 0];
+  w.dinerHold = 0;
+  w.dinerDid = false;
+  w.dinerPi = 0;
+  const diner = anim?.diner;
+  if (w.dinerJob === "sit") {
+    const seat = WORK_SEATS[av.userData.npcId] || diner?.seat;
+    if (!seat) {
+      w.dinerJob = "patrol";
+    } else {
+      const back = 0.88;
+      w.dinerPts = [{
+        x: seat.x - Math.sin(seat.rotY || 0) * back,
+        z: seat.z - Math.cos(seat.rotY || 0) * back,
+      }];
+      return;
+    }
+  }
+  if (w.dinerJob === "stove") {
+    w.dinerPts = [diner?.stoveStand || { x: 13.6, z: 0.65 }];
+    return;
+  }
+  if (w.dinerJob === "wash") {
+    w.dinerPts = [diner?.washStand || { x: 15.95, z: 0.65 }];
+    return;
+  }
+  const pool = dinerPatrolPts();
+  w.dinerPts = [];
+  for (let n = 0; n < 3; n++) w.dinerPts.push(pool[(Math.random() * pool.length) | 0]);
+}
+
+function updateDinerJob(av, w, dt, t, i, anim, playerPos) {
+  const scale = av.userData.sleepScale || 0.4;
+  const { head, leftArm, rightArm, leftLeg, rightLeg } = av.userData;
+  if (!w.dinerJob) startDinerJob(av, w, anim);
+
+  if (w.dinerHold > 0) {
+    w.dinerHold -= dt;
+    if (w.dinerJob === "sit") {
+      if (head) {
+        head.rotation.y = Math.sin(t * 0.7 + i) * 0.18;
+        head.rotation.x = 0.08;
+      }
+    } else if (w.dinerJob === "stove") {
+      if (rightArm) {
+        rightArm.rotation.x = -0.9 + Math.sin(t * 3.2) * 0.2;
+        rightArm.rotation.z = 0.15;
+      }
+      if (head) head.rotation.x = 0.2;
+    } else if (w.dinerJob === "wash") {
+      if (rightArm) {
+        rightArm.rotation.x = -1.05 + Math.sin(t * 6.5) * 0.18;
+        rightArm.rotation.z = 0.2;
+      }
+      if (leftArm) leftArm.rotation.x = -0.35;
+      if (head) head.rotation.x = 0.16;
+    }
+    if (w.dinerHold <= 0) {
+      if (w.dinerJob === "wash") anim?.diner?.washer?.userData.setRun?.(false);
+      startDinerJob(av, w, anim);
+    }
+    return;
+  }
+
+  if (w.dinerSit) return;
+
+  if (w.dinerHold <= 0 && w.dinerJob === "patrol" && updateWakeAcknowledge(av, w, playerPos, dt, t, scale)) {
+    return;
+  }
+
+  const target = w.dinerPts?.[w.dinerPi];
+  if (!target) {
+    if (w.dinerJob === "sit") {
+      const seat = WORK_SEATS[av.userData.npcId] || anim?.diner?.seat;
+      if (seat) {
+        poseNpcSit(av, seat);
+        av.userData.state = "awake";
+        w.dinerSit = true;
+        w.dinerHold = 6.5 + Math.random() * 5.5;
+      } else {
+        startDinerJob(av, w, anim, "patrol");
+      }
+      return;
+    }
+    if (w.dinerJob === "stove") {
+      if (!w.dinerDid) {
+        anim?.diner?.stove?.userData.toggle?.();
+        w.dinerDid = true;
+      }
+      const face = anim?.diner?.stoveFace ?? Math.PI;
+      av.rotation.y += wrapPi(face - av.rotation.y) * Math.min(1, 8 * dt);
+      w.dinerHold = 3.4 + Math.random() * 2.2;
+      return;
+    }
+    if (w.dinerJob === "wash") {
+      if (!w.dinerDid) {
+        anim?.diner?.washer?.userData.setRun?.(true);
+        w.dinerDid = true;
+      }
+      const face = anim?.diner?.washFace ?? Math.PI;
+      av.rotation.y += wrapPi(face - av.rotation.y) * Math.min(1, 8 * dt);
+      w.dinerHold = 4.8 + Math.random() * 2.8;
+      return;
+    }
+    startDinerJob(av, w, anim);
+    return;
+  }
+
+  const dx = target.x - av.position.x;
+  const dz = target.z - av.position.z;
+  const dist = Math.hypot(dx, dz);
+  if (dist < 0.22) {
+    w.dinerPi += 1;
+    return;
+  }
+  const step = Math.min(dist, 1.2 * dt);
+  const inv = 1 / dist;
+  av.position.x += dx * inv * step;
+  av.position.z += dz * inv * step;
+  av.rotation.y += wrapPi(Math.atan2(dx, dz) - av.rotation.y) * Math.min(1, 8 * dt);
+  w.phaseWalk = (w.phaseWalk || 0) + 6.5 * dt;
+  const swing = Math.sin(w.phaseWalk) * 0.34;
+  if (leftLeg) leftLeg.rotation.x = swing;
+  if (rightLeg) rightLeg.rotation.x = -swing;
+  if (leftArm) {
+    leftArm.rotation.x = -swing * 0.7;
+    leftArm.rotation.z = 0;
+  }
+  if (rightArm) {
+    rightArm.rotation.x = swing * 0.7;
+    rightArm.rotation.z = 0;
+  }
+  av.position.y = scale + Math.abs(Math.sin(w.phaseWalk)) * 0.016;
+}
+
+function updateDinerMachines(anim, dt, playerPos = null) {
+  if (playerPos && Math.hypot(playerPos.x - 11.5, playerPos.z - 4.5) > 22) return;
+  const washer = anim?.diner?.washer;
+  if (!washer?.userData) return;
+  const run = !!washer.userData.running;
+  washer.userData.spin = (washer.userData.spin || 0) + (run ? dt * 9.2 : 0);
+  if (washer.userData.drum) washer.userData.drum.rotation.z = washer.userData.spin;
+}
+
+function workRoomNeedles(work) {
+  return {
+    garden: ["garden"],
+    diner: ["diner", "kitchen"],
+    kitchen: ["diner", "kitchen"],
+    engine: ["engine room"],
+    washroom: ["washroom", "hygiene"],
+    cockpit: ["cockpit", "control"],
+    hub: ["hub"],
+  }[work] || null;
+}
+
+/** Animate on-post crew as that room's door is about to open, or once inside. */
+function npcWorkShouldAnimate(av, playerPos, autoDoors) {
+  if (!playerPos) return true;
+  av.getWorldPosition(_avWorld);
+  if (_avWorld.distanceToSquared(playerPos) < 7.2 * 7.2) return true;
+  const needles = workRoomNeedles(av.userData.npcWork);
+  if (!needles) return false;
+  // Doors open at 3.2m — start work a step earlier so they are already moving
+  const r2 = 3.45 * 3.45;
+  for (let i = 0; i < (autoDoors || []).length; i++) {
+    const d = autoDoors[i];
+    if (!d?.trigger) continue;
+    const L = String(d.roomLabel || "").toLowerCase();
+    if (!needles.some((n) => L.includes(n))) continue;
+    if (nearDoorTrigger(playerPos, d, r2)) return true;
+  }
+  return false;
+}
+
 /** Stand / wave / walk / work for dehibernated bunk crew. */
-export function updateAwakeCrew(crew, dt, t, autoDoors = null, playerPos = null) {
+export function updateAwakeCrew(crew, dt, t, autoDoors = null, playerPos = null, anim = null) {
   if (!crew?.length) return;
+  updateDinerMachines(anim, dt, playerPos);
   for (let i = 0; i < crew.length; i++) {
     const av = crew[i];
     const w = av.userData.wake;
     if (!w) continue;
+    if (isDinerWork(av) && (w.phase === "work" || w.dinerSit || w.phase === "seated")) {
+      if (!npcWorkShouldAnimate(av, playerPos, autoDoors)) continue;
+      updateDinerJob(av, w, dt, t, i, anim, playerPos);
+      continue;
+    }
     if (av.userData.state === "sitting" || w.phase === "seated") continue;
     const { head, leftArm, rightArm, leftLeg, rightLeg } = av.userData;
     const scale = av.userData.sleepScale || 0.4;
@@ -3500,14 +4115,15 @@ export function updateAwakeCrew(crew, dt, t, autoDoors = null, playerPos = null)
       if (w.phase === "wave" && w.t <= 0 && !w.spoke) {
         w.spoke = true;
         w.phase = "talk";
-        w.t = 0.5;
+        w.t = 1.35;
         const name = av.userData.npcName || "crew";
         const role = av.userData.npcRole || "crew";
         const duty = av.userData.npcDuty || "I'll get to work.";
         shipVoice.speakNpc("Thanks for dehibernating me, Captain.", av.userData.npcId);
         shipVoice.speakNpc("I'm " + name + ", " + role + ". " + duty, av.userData.npcId);
       }
-      if (w.phase === "talk" && w.spoke && w.t <= 0 && !shipVoice.speaking) {
+      // Own short thank-you beat, then walk. Do not wait for other NPCs' VO.
+      if (w.phase === "talk" && w.spoke && w.t <= 0) {
         w.phase = "walk";
         w.wp = 0;
         if (rightArm) rightArm.rotation.set(0, 0, 0);
@@ -3520,6 +4136,24 @@ export function updateAwakeCrew(crew, dt, t, autoDoors = null, playerPos = null)
     if (w.phase === "walk") {
       const target = w.path[w.wp];
       if (!target) {
+        if (av.userData.npcWork === "garden") {
+          w.phase = "work";
+          av.userData.state = "awake";
+          startGardenTend(anim, av, w);
+          continue;
+        }
+        if (av.userData.npcWork === "washroom") {
+          w.phase = "work";
+          av.userData.state = "awake";
+          startWashMop(av, w);
+          continue;
+        }
+        if (isDinerWork(av)) {
+          w.phase = "work";
+          av.userData.state = "awake";
+          startDinerJob(av, w, anim);
+          continue;
+        }
         const seat = WORK_SEATS[av.userData.npcId];
         if (seat) {
           const pose = sitWorldPose(seat, scale);
@@ -3606,6 +4240,19 @@ export function updateAwakeCrew(crew, dt, t, autoDoors = null, playerPos = null)
     }
 
     if (w.phase === "work") {
+      if (!npcWorkShouldAnimate(av, playerPos, autoDoors)) continue;
+      if (av.userData.npcWork === "garden") {
+        updateGardenTend(av, w, dt, t, i, anim, playerPos);
+        continue;
+      }
+      if (av.userData.npcWork === "washroom") {
+        updateWashMop(av, w, dt, t, i, playerPos);
+        continue;
+      }
+      if (isDinerWork(av)) {
+        updateDinerJob(av, w, dt, t, i, anim, playerPos);
+        continue;
+      }
       if (updateWakeAcknowledge(av, w, playerPos, dt, t, scale)) continue;
       w.t -= dt;
       if (w.t <= 0) {
@@ -3776,6 +4423,7 @@ function npcChatEligible(av) {
   if (!st || st === "sleeping") return false;
   const phase = av.userData.wake?.phase;
   if (phase === "rise" || phase === "wave" || phase === "talk" || phase === "hop") return false;
+  if ((av.userData.chat?.cool || 0) > 0) return false;
   return true;
 }
 
@@ -3785,6 +4433,22 @@ function npcChatEligible(av) {
  */
 export function updateNpcChitchat(crew, dt, playerPos = null) {
   if (!crew?.length || !playerPos) return;
+
+  const speakerId = shipVoice.npcId;
+  const talkFrame = ((Math.max(1, shipVoice.npcPulse || 1) - 1) % 3) + 1;
+
+  for (let i = 0; i < crew.length; i++) {
+    const av = crew[i];
+    const chat = av.userData.chat || (av.userData.chat = {
+      nearT: 0,
+      wait: 0,
+      cool: 0,
+      recent: [],
+    });
+    if (chat.cool > 0 && !(speakerId && av.userData.npcId === speakerId)) {
+      chat.cool -= dt;
+    }
+  }
 
   let best = null;
   let bestD2 = CHAT_RADIUS2;
@@ -3799,34 +4463,22 @@ export function updateNpcChitchat(crew, dt, playerPos = null) {
     }
   }
 
-  const speakerId = shipVoice.npcId;
-  const talkFrame = ((Math.max(1, shipVoice.npcPulse || 1) - 1) % 3) + 1;
-
   for (let i = 0; i < crew.length; i++) {
     const av = crew[i];
-    const chat = av.userData.chat || (av.userData.chat = {
-      nearT: 0,
-      wait: 0,
-      cool: 0,
-      recent: [],
-    });
+    const chat = av.userData.chat;
     if (speakerId && av.userData.npcId === speakerId) {
-      if (chat.cool > 0) chat.cool -= dt;
       setNpcThinkFrame(av, talkFrame);
+      continue;
+    }
+    if ((chat.cool || 0) > 0) {
+      chat.nearT = 0;
+      chat.wait = 0;
+      setNpcThinkFrame(av, 0);
       continue;
     }
     if (av !== best) {
       chat.nearT = 0;
       chat.wait = 0;
-      // Walking away (or another NPC becoming nearest) frees this one
-      // so the next approach can think and talk again.
-      chat.cool = 0;
-      setNpcThinkFrame(av, 0);
-      continue;
-    }
-    if (chat.cool > 0) {
-      chat.cool -= dt;
-      chat.nearT = 0;
       setNpcThinkFrame(av, 0);
       continue;
     }
@@ -3852,7 +4504,7 @@ export function updateNpcChitchat(crew, dt, playerPos = null) {
     if (chat.recent.length > 12) chat.recent.shift();
     chat.nearT = 0;
     chat.wait = 1 + Math.random() * 9;
-    chat.cool = 14 + Math.random() * 16;
+    chat.cool = 10;
   }
 }
 
@@ -3865,24 +4517,59 @@ export function isNpcWaiting(av) {
 
 export function waitingNpcFromHit(obj, crew) {
   const av = sleeperFromHit(obj, crew);
-  return av && isNpcWaiting(av) ? av : null;
+  if (!av || av.userData.state === "sleeping") return null;
+  if (av.userData.wake?.phase === "rise") return null;
+  return av;
 }
 
-/** Metallic poke + a little random wiggle. */
+const POKE_WINDOW = 2;
+const POKE_NEED = 4;
+const POKE_SHAKE_DUR = 2.65;
+
+/** Metallic poke. Enough hits in a short window → full shaky + gear SFX. */
 export function pokeWaitingNpc(av) {
-  if (!isNpcWaiting(av)) return false;
+  if (!av || av.userData.state === "sleeping") return false;
   const wig = av.userData.wiggle;
-  if (wig && wig.t < 0.22) return false;
-  playNpcBonk();
+  if (wig?.crazy) return false;
+  if (wig && wig.t < 0.07) return false;
+
+  const now = performance.now() * 0.001;
+  const hits = av.userData.pokeHits || (av.userData.pokeHits = { n: 0, t0: now });
+  if (now - hits.t0 > POKE_WINDOW) {
+    hits.n = 0;
+    hits.t0 = now;
+  }
+  hits.n += 1;
+
   const sit = av.userData.state === "sitting";
   const dir = Math.random() < 0.5 ? -1 : 1;
+  if (hits.n >= POKE_NEED) {
+    hits.n = 0;
+    hits.t0 = now;
+    playNpcGearFrenzy(POKE_SHAKE_DUR);
+    av.userData.wiggle = {
+      t: 0,
+      dur: POKE_SHAKE_DUR,
+      crazy: true,
+      yaw: dir * (0.42 + Math.random() * 0.22),
+      x: sit ? 0 : dir * (0.07 + Math.random() * 0.05),
+      z: sit ? 0 : (Math.random() - 0.5) * 0.1,
+      headZ: dir * (0.38 + Math.random() * 0.18),
+      prev: 0,
+    };
+    return true;
+  }
+
+  playNpcBonk();
   av.userData.wiggle = {
     t: 0,
-    dur: 0.36 + Math.random() * 0.2,
+    dur: 0.32 + Math.random() * 0.16,
+    crazy: false,
     yaw: dir * (0.14 + Math.random() * 0.16),
     x: sit ? 0 : dir * (0.03 + Math.random() * 0.04),
     z: sit ? 0 : (Math.random() - 0.5) * 0.05,
     headZ: dir * (0.12 + Math.random() * 0.1),
+    prev: 0,
   };
   return true;
 }
@@ -3895,12 +4582,16 @@ export function updateNpcWiggle(crew, dt) {
     if (!wig) continue;
     wig.t += dt;
     const u = Math.min(1, wig.t / wig.dur);
-    const wave = Math.sin(u * Math.PI);
-    av.rotation.y += wig.yaw * wave;
-    av.position.x += wig.x * wave;
-    av.position.z += wig.z * wave;
+    const wave = wig.crazy
+      ? Math.sin(wig.t * 31) * (1 - u * 0.25) + Math.sin(wig.t * 19.5) * 0.45
+      : Math.sin(u * Math.PI);
+    const dw = wave - (wig.prev || 0);
+    wig.prev = wave;
+    av.rotation.y += wig.yaw * dw;
+    av.position.x += wig.x * dw;
+    av.position.z += wig.z * dw;
     const head = av.userData.head;
-    if (head) head.rotation.z += wig.headZ * wave;
+    if (head) head.rotation.z += wig.headZ * dw;
     if (u >= 1) av.userData.wiggle = null;
   }
 }
@@ -4621,7 +5312,8 @@ export function npcWorkRoomName(work) {
   return (
     {
       garden: "Hydroponic Garden",
-      kitchen: "Kitchen",
+      kitchen: "Diner",
+      diner: "Diner",
       engine: "Engine Room",
       washroom: "Washroom",
       cockpit: "Cockpit",
@@ -4635,7 +5327,8 @@ export function npcWorkRoomName(work) {
 export function isNpcWorkRoomLocked(work, doors) {
   const needles = {
     garden: ["garden"],
-    kitchen: ["kitchen"],
+    kitchen: ["kitchen", "diner"],
+    diner: ["diner", "kitchen"],
     engine: ["engine room"],
     washroom: ["washroom", "hygiene"],
   }[work];
@@ -4870,30 +5563,31 @@ function makeStove(group, x, y, z, rotY = 0, interactables = null, roomOx = 0, r
   g.add(box(1.4, 0.12, 0.5, body, 0, 2.35, -0.18));
   g.add(box(0.35, 0.55, 0.32, body, 0, 2.7, -0.2));
 
-  if (interactables) {
-    interactables.push({
-      kind: "stove",
-      on: false,
-      burnerMat,
-      position: new THREE.Vector3(roomOx + x, 1.0, roomOz + z),
-      radius: 2.4,
-      prompt() {
-        return this.on ? "Press E · Turn stove off" : "Press E · Turn stove on";
-      },
-      toggle() {
-        this.on = !this.on;
-        if (this.on) {
-          this.burnerMat.color.setHex(0xff6622);
-          this.burnerMat.emissive.setHex(0xff4411);
-          this.burnerMat.emissiveIntensity = 0.65;
-        } else {
-          this.burnerMat.color.setHex(0x6a7078);
-          this.burnerMat.emissive.setHex(0x000000);
-          this.burnerMat.emissiveIntensity = 0;
-        }
-      },
-    });
-  }
+  const stoveAct = {
+    kind: "stove",
+    on: false,
+    burnerMat,
+    position: new THREE.Vector3(roomOx + x, 1.0, roomOz + z),
+    radius: 2.4,
+    prompt() {
+      return this.on ? "Press E · Turn stove off" : "Press E · Turn stove on";
+    },
+    toggle() {
+      this.on = !this.on;
+      if (this.on) {
+        this.burnerMat.color.setHex(0xff6622);
+        this.burnerMat.emissive.setHex(0xff4411);
+        this.burnerMat.emissiveIntensity = 0.65;
+      } else {
+        this.burnerMat.color.setHex(0x6a7078);
+        this.burnerMat.emissive.setHex(0x000000);
+        this.burnerMat.emissiveIntensity = 0;
+      }
+    },
+  };
+  g.userData.toggle = () => stoveAct.toggle();
+  g.userData.stand = { x: roomOx + x, z: roomOz + z + 0.95, face: Math.PI };
+  if (interactables) interactables.push(stoveAct);
   return g;
 }
 
@@ -4931,7 +5625,7 @@ function makeMicrowave(group, x, y, z, rotY = 0) {
 }
 
 /** Front-load washing machine */
-function makeWashingMachine(group, x, y, z, rotY = 0) {
+function makeWashingMachine(group, x, y, z, rotY = 0, roomOx = 0, roomOz = 0) {
   const g = new THREE.Group();
   g.position.set(x, y, z);
   g.rotation.y = rotY;
@@ -4949,6 +5643,13 @@ function makeWashingMachine(group, x, y, z, rotY = 0) {
   g.add(box(0.65, 0.12, 0.05, mat(0xb8c0c8, { metalness: 0.4, roughness: 0.35 }), 0, 1.0, 0.35));
   g.add(cyl(0.035, 0.035, 0.03, chrome, 0.2, 1.0, 0.38, 10));
   g.add(box(0.2, 0.04, 0.02, dark, -0.15, 1.0, 0.38));
+  g.userData.drum = glass;
+  g.userData.spin = 0;
+  g.userData.running = false;
+  g.userData.setRun = (on) => {
+    g.userData.running = !!on;
+  };
+  g.userData.stand = { x: roomOx + x, z: roomOz + z + 0.95, face: Math.PI };
   return g;
 }
 
@@ -5029,6 +5730,8 @@ function makePlant(
     phase: x * 0.4 + z * 0.25,
     animating: false,
     endT: null,
+    wx: roomOx + x,
+    wz: roomOz + z,
   };
   if (anim) {
     if (!anim.plants) anim.plants = [];
@@ -5044,15 +5747,7 @@ function makePlant(
         return "Press E · Shake plant";
       },
       toggle() {
-        if (!anim) return;
-        // only one plant animates at a time
-        for (let i = 0; i < (anim.plants || []).length; i++) {
-          const p = anim.plants[i];
-          if (p !== plant) resetPlantPose(p);
-        }
-        plant.animating = true;
-        plant.endT = null; // start window set on first update tick
-        anim.activePlant = plant;
+        triggerPlantShake(anim, plant);
       },
     });
   }
@@ -5417,7 +6112,7 @@ function makeRisingStallGate(g, colliders, interactables, roomOx, roomOz, bankCx
  */
 function makeStallBank(room, colliders, interactables, roomOx, roomOz, {
   cx, cz, count = 2, stallW = 1.25, depth = 1.7, rotY = 0,
-  kind = "toilet", stallH = 3.85,
+  kind = "toilet", stallH = 3.85, slotsOut = null,
 }) {
   const stallTex = canvasTex("stallMarble_v1", patternStallPanel, 256);
   const wallM = kind === "shower"
@@ -5462,18 +6157,31 @@ function makeStallBank(room, colliders, interactables, roomOx, roomOz, {
   for (let i = 0; i < count; i++) {
     const slotX = -totalW * 0.5 + stallW * (i + 0.5);
     if (kind === "toilet") {
-      // i=0 is the far/east corner stall (innermost) on the washroom bank
+      // i=0 is the far/east corner stall (innermost) — the only default toilet
       const special = i === 0;
-      makeToilet(g, slotX, 0, -depth * 0.22, 0, {
-        special,
-        interactables,
-        roomOx,
-        roomOz,
-        bankCx: cx,
-        bankCz: cz,
-        bankRotY: rotY,
-      });
+      const slotZ = -depth * 0.22;
+      if (special) {
+        makeToilet(g, slotX, 0, slotZ, 0, {
+          special: true,
+          interactables,
+          roomOx,
+          roomOz,
+          bankCx: cx,
+          bankCz: cz,
+          bankRotY: rotY,
+        });
+      }
       makeLooRoll(g, slotX + stallW * 0.5 - 0.03, 0.95, -depth * 0.08);
+      if (slotsOut) {
+        slotsOut.push({
+          group: g,
+          slotX,
+          z: slotZ,
+          filled: special,
+          printed: false,
+          toilet: null,
+        });
+      }
     } else {
       makeShowerFixtures(g, slotX, 0, 0, 0);
       g.add(box(stallW - 0.12, 0.04, depth - 0.12, patternedMat(0xeef3f8, stallTex, 1.4, 1.2, {
@@ -5698,7 +6406,7 @@ function makeInfoHubDoorHolo(room, anim, {
     plane.position.set(localX + inward * 0.35, holoY, localZ);
     plane.rotation.y = Math.PI / 2;
   }
-  plane.renderOrder = 1;
+  plane.renderOrder = 4;
   room.add(plane);
   anim.infoHubHolos.push(plane);
   return plane;
@@ -5781,6 +6489,10 @@ export function unlockShipDoor(door, opts = {}) {
   if (door.unlockHolo && !opts.keepHoloVisible) {
     door.unlockHolo.visible = false;
   }
+  for (const p of door.nameLabels || []) {
+    p.userData.labelRevealed = true;
+    p.visible = true;
+  }
   try {
     markDoorUnlocked(door.key);
   } catch (_) {}
@@ -5808,6 +6520,10 @@ export function relockAllShipDoors(doors) {
         holo.material.opacity = holo.userData.baseOpacity ?? 0.22;
         holo.material.needsUpdate = true;
       }
+    }
+    for (const p of door.nameLabels || []) {
+      p.userData.labelRevealed = false;
+      p.visible = false;
     }
   }
 }
@@ -5927,8 +6643,96 @@ function makeWallGlowText(room, {
   return plane;
 }
 
+function mysteryTagForRoomLabel(label) {
+  const L = String(label || "").toLowerCase();
+  if (L.includes("garden")) return "garden";
+  if (L.includes("diner") || L.includes("kitchen")) return "diner";
+  if (L.includes("crew quarters") || L.includes("dorm")) return "dorm";
+  if (L.includes("washroom") || L.includes("hygiene")) return "washroom";
+  if (L.includes("engine room")) return "engine";
+  return "";
+}
+
+const FACILITY_BOARD = [
+  { name: "Cockpit", roomNeedles: ["cockpit"], alwaysOpen: true },
+  { name: "Info Hub", roomNeedles: ["hub"], alwaysOpen: true },
+  { name: "Garden", roomNeedles: ["garden"], doorTag: "garden" },
+  { name: "Diner", roomNeedles: ["diner", "kitchen"], doorTag: "diner" },
+  { name: "Washroom", roomNeedles: ["washroom", "hygiene"], doorTag: "washroom" },
+  { name: "Engine room", roomNeedles: ["engine room"], doorTag: "engine" },
+];
+
+function roomLabelMatches(label, needles) {
+  const L = String(label || "").toLowerCase();
+  return (needles || []).some((n) => L.includes(n));
+}
+
+function facilityDoorOpen(autoDoors, doorTag) {
+  for (const d of autoDoors || []) {
+    if (mysteryTagForRoomLabel(d.roomLabel) !== doorTag) continue;
+    if (!d.locked) return true;
+  }
+  return false;
+}
+
+function facilityFullyDebugged(anim, needles) {
+  const mons = (anim?.wallMonitors || []).filter((m) =>
+    roomLabelMatches(m.room?.userData?.label, needles)
+  );
+  if (mons.length && !mons.every((m) => m.debugged)) return false;
+  const rooms = (anim?.sosRooms || []).filter((r) =>
+    roomLabelMatches(r.userData?.label, needles)
+  );
+  if (rooms.some((r) => r.userData?.lightMode === "sos")) return false;
+  return mons.length > 0 || rooms.length > 0;
+}
+
+/** Post-briefing console rows: hidden | sos | ok */
+export function getFacilityBoard(anim, autoDoors) {
+  return FACILITY_BOARD.map((spec) => {
+    const repaired = spec.alwaysOpen || facilityDoorOpen(autoDoors, spec.doorTag);
+    if (!repaired) return { name: spec.name, state: "hidden" };
+    return {
+      name: spec.name,
+      state: facilityFullyDebugged(anim, spec.roomNeedles) ? "ok" : "sos",
+    };
+  });
+}
+
+export function getCrewBoard(anim) {
+  const awake = new Set();
+  for (const av of anim?.sleepingCrew || []) {
+    if (av?.userData?.state && av.userData.state !== "sleeping") {
+      awake.add(av.userData.npcId);
+    }
+  }
+  return CREW_ROSTER.map((spec) => ({
+    name: String(spec.name || "").trim().split(/\s+/)[0] || spec.name,
+    role: spec.role,
+    active: isNpcActivated(spec.id) || awake.has(spec.id),
+  }));
+}
+
+function linkDoorOverLabels(anim, autoDoors) {
+  for (const item of anim?.doorOverLabels || []) {
+    const plane = item?.plane;
+    if (!plane) continue;
+    plane.userData.mysteryUntilUnlock = true;
+    plane.userData.labelRevealed = false;
+    plane.visible = false;
+    for (const d of autoDoors || []) {
+      if (mysteryTagForRoomLabel(d.roomLabel) !== item.tag) continue;
+      if (!d.nameLabels) d.nameLabels = [];
+      if (!d.nameLabels.includes(plane)) d.nameLabels.push(plane);
+      const open = !d.locked;
+      plane.userData.labelRevealed = open;
+      plane.visible = open;
+    }
+  }
+}
+
 /** Glow label centered above a room's door (on the lintel band). */
-function makeDoorOverLabel(room, side, text, size = {}) {
+function makeDoorOverLabel(room, side, text, size = {}, opts = {}) {
   const dims = room.userData.dims;
   if (!dims) return null;
   const { w, d, h } = dims;
@@ -5951,7 +6755,7 @@ function makeDoorOverLabel(room, side, text, size = {}) {
     x = -w * 0.5 + wallT + faceInset;
     rotY = Math.PI / 2;
   }
-  return makeWallGlowText(room, {
+  const plane = makeWallGlowText(room, {
     text,
     x,
     y,
@@ -5960,6 +6764,14 @@ function makeDoorOverLabel(room, side, text, size = {}) {
     h: size.h ?? 0.52,
     fontPx: size.fontPx ?? 88,
   });
+  if (opts.mysteryTag && opts.anim) {
+    plane.visible = false;
+    plane.userData.mysteryUntilUnlock = true;
+    plane.userData.labelRevealed = false;
+    if (!opts.anim.doorOverLabels) opts.anim.doorOverLabels = [];
+    opts.anim.doorOverLabels.push({ plane, tag: opts.mysteryTag });
+  }
+  return plane;
 }
 
 /** Bold Orbitron ceiling brand. */
@@ -6129,6 +6941,7 @@ function makeBigScreen(group, anim, x, y, z, w, h, rotY = 0, opts = {}) {
   g.add(deco);
 
   const barMats = [];
+  const barMeshes = [];
   // fake UI bars (flat on screen, kept inside panel)
   for (let i = 0; i < 5; i++) {
     const bw = Math.min(w * (0.12 + (i % 3) * 0.06), w * 0.28);
@@ -6137,6 +6950,7 @@ function makeBigScreen(group, anim, x, y, z, w, h, rotY = 0, opts = {}) {
     });
     barMats.push(barMat);
     const bar = box(bw, 0.05, 0.01, barMat, -w * 0.22 + (i % 3) * 0.22, h * 0.22 - Math.floor(i / 3) * 0.28, faceZ);
+    barMeshes.push(bar);
     anim.bars.push(bar);
     deco.add(bar);
   }
@@ -6152,6 +6966,7 @@ function makeBigScreen(group, anim, x, y, z, w, h, rotY = 0, opts = {}) {
     { r0: maxR * 0.2, r1: maxR * 0.28, start: 4.2, len: 2.6 },
   ];
   const ringMats = [];
+  const ringMeshes = [];
   for (let i = 0; i < segments.length; i++) {
     const s = segments[i];
     const ringMat = new THREE.MeshBasicMaterial({
@@ -6169,6 +6984,7 @@ function makeBigScreen(group, anim, x, y, z, w, h, rotY = 0, opts = {}) {
     seg.position.set(cx, cy, faceZ);
     const dir = i % 2 === 0 ? 1 : -1;
     seg.userData.spinSpeed = dir * (0.25 + i * 0.38 + (i * 0.17) % 0.4);
+    ringMeshes.push(seg);
     deco.add(seg);
     anim.screenRings.push(seg);
   }
@@ -6185,7 +7001,8 @@ function makeBigScreen(group, anim, x, y, z, w, h, rotY = 0, opts = {}) {
   const outerW = w + 0.28;
   const outerH = h + 0.28;
   const bottomY = -outerH / 2 + rimW * 0.5;
-  g.add(box(outerW - rimW * 0.45, 0.03, 0.042, underGlowMat, 0, bottomY, rimFront + 0.02));
+  const barW = Math.max(0.72, Math.min(w * 0.5, 4.2));
+  g.add(box(barW, 0.03, 0.042, underGlowMat, 0, bottomY, rimFront + 0.02));
 
   if (opts.interactive) {
     g.userData.interactiveScreen = true;
@@ -6206,6 +7023,8 @@ function makeBigScreen(group, anim, x, y, z, w, h, rotY = 0, opts = {}) {
       screenMat,
       barMats,
       ringMats,
+      barMeshes,
+      ringMeshes,
       underGlowMat,
     }, { maxW: w, maxH: h, z: faceZ + 0.002 });
   }
@@ -6417,6 +7236,8 @@ export function createStatusView(aspect = 16 / 9) {
   let alertDotPhase = 0;
   let dpUsed = 0;
   let dpAvailable = 0;
+  let facilities = [];
+  let crewRows = [];
 
   function pageLines() {
     return STATUS_PAGES[pageIdx] || [];
@@ -6492,6 +7313,11 @@ export function createStatusView(aspect = 16 / 9) {
     const bodyFont = "500 26px ui-monospace, Consolas, monospace";
     const headFont = "700 30px ui-monospace, Consolas, monospace";
 
+    if (complete) {
+      drawStatusBoard(padX, padY);
+      return;
+    }
+
     drawChrome(padX, padY);
 
     let y = padY + 44;
@@ -6546,21 +7372,71 @@ export function createStatusView(aspect = 16 / 9) {
       if (y > H - 100) break;
     }
 
-    if (complete) {
-      y = Math.max(y + 24, H - 110);
-      ctx.fillStyle = "rgba(90, 255, 230, 0.85)";
-      ctx.font = "700 22px ui-monospace, Consolas, monospace";
-      ctx.fillText("DATA POINTS", padX, y);
-      y += 36;
-      ctx.fillStyle = "#9ef7ef";
-      ctx.font = "600 26px ui-monospace, Consolas, monospace";
-      ctx.fillText(
-        dpUsed + " data points used  /  " + dpAvailable + " data points available",
-        padX,
-        y
-      );
+    tex.needsUpdate = true;
+  }
+
+  function drawStatusBoard(padX, padY) {
+    ctx.fillStyle = "#061018";
+    ctx.fillRect(0, 0, W, H);
+    const grad = ctx.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, "rgba(20, 80, 90, 0.28)");
+    grad.addColorStop(1, "rgba(8, 20, 28, 0.35)");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = "rgba(90, 230, 220, 0.5)";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(28, 28, W - 56, H - 56);
+
+    const headFont = "700 44px ui-monospace, Consolas, monospace";
+    const bodyFont = "600 36px ui-monospace, Consolas, monospace";
+    const leftX = padX;
+    const rightX = Math.round(W * 0.48);
+    let y = padY + 48;
+
+    ctx.fillStyle = "rgba(90, 255, 230, 0.92)";
+    ctx.font = headFont;
+    ctx.fillText("DATA POINTS", leftX, y);
+    y += 56;
+    ctx.font = bodyFont;
+    ctx.fillStyle = "#c8fff6";
+    ctx.fillText("Used   " + dpUsed, leftX, y);
+    y += 50;
+    ctx.fillText("Available   " + dpAvailable, leftX, y);
+    y += 72;
+    ctx.fillStyle = "rgba(90, 255, 230, 0.92)";
+    ctx.font = headFont;
+    ctx.fillText("FACILITIES", leftX, y);
+    y += 56;
+    ctx.font = bodyFont;
+    const rows = facilities.length
+      ? facilities
+      : FACILITY_BOARD.map((s) => ({ name: s.name, state: "hidden" }));
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      if (row.state === "hidden") {
+        ctx.fillStyle = "#6a7a82";
+        ctx.fillText("???", leftX, y);
+      } else {
+        ctx.fillStyle = row.state === "ok" ? "#5dff9a" : "#ff5a5a";
+        ctx.fillText(row.name, leftX, y);
+      }
+      y += 50;
     }
 
+    let cy = padY + 48;
+    ctx.fillStyle = "rgba(90, 255, 230, 0.92)";
+    ctx.font = headFont;
+    ctx.fillText("CREW", rightX, cy);
+    cy += 56;
+    ctx.font = bodyFont;
+    const crew = crewRows.length ? crewRows : getCrewBoard(null);
+    for (let i = 0; i < crew.length; i++) {
+      const row = crew[i];
+      const label = row.role ? row.name + "  ·  " + row.role : row.name;
+      ctx.fillStyle = row.active ? "#5dff9a" : "#ff5a5a";
+      ctx.fillText(label, rightX, cy);
+      cy += 46;
+    }
     tex.needsUpdate = true;
   }
 
@@ -6676,6 +7552,14 @@ export function createStatusView(aspect = 16 / 9) {
     setDatapointStats(used, available) {
       dpUsed = Math.max(0, Math.floor(Number(used) || 0));
       dpAvailable = Math.max(0, Math.floor(Number(available) || 0));
+      if (complete) drawFrame();
+    },
+    setFacilityStats(rows) {
+      facilities = Array.isArray(rows) ? rows : [];
+      if (complete) drawFrame();
+    },
+    setCrewStats(rows) {
+      crewRows = Array.isArray(rows) ? rows : [];
       if (complete) drawFrame();
     },
     update(dt) {
@@ -7116,7 +8000,7 @@ export function updateSouthCorridorGate(anim, player, dt) {
     if (gate.toss) {
       player.inputFrozen = false;
       player.position.y = player.eye;
-      if (player.camera) player.camera.position.copy(player.position);
+      player._applyCamera?.();
       gate.toss = null;
     }
     return false;
@@ -7126,14 +8010,14 @@ export function updateSouthCorridorGate(anim, player, dt) {
     const toss = gate.toss;
     toss.t += dt;
     const u = Math.min(1, toss.t / toss.dur);
-    const ease = u * u * (3 - 2 * u);
+    const ease = 1 - (1 - u) * (1 - u) * (1 - u);
     player.position.x = toss.x0 + (toss.x1 - toss.x0) * ease;
     player.position.z = toss.z0 + (toss.z1 - toss.z0) * ease;
     player.position.y = player.eye + toss.peak * 4 * u * (1 - u);
-    if (player.camera) player.camera.position.copy(player.position);
+    player._applyCamera?.();
     if (u >= 1) {
       player.position.y = player.eye;
-      if (player.camera) player.camera.position.copy(player.position);
+      player._applyCamera?.();
       player.inputFrozen = false;
       gate.toss = null;
     }
@@ -7156,12 +8040,12 @@ export function updateSouthCorridorGate(anim, player, dt) {
   const dist = Math.hypot(x1 - x, z1 - z);
   gate.toss = {
     t: 0,
-    dur: Math.min(1.35, 0.72 + dist * 0.035),
+    dur: Math.min(0.55, 0.28 + dist * 0.016),
     x0: x,
     z0: z,
     x1,
     z1,
-    peak: 2.35,
+    peak: 0.72,
   };
   return true;
 }
@@ -7245,7 +8129,7 @@ export function buildShip(scene) {
     };
   };
   const chairTone = 0x7a90b0;
-  // middle desk — one chair (crew unlock later)
+  // middle desk — helm
   {
     const p = deskSeat(0, 1.4, 0, 0, -1.2);
     makeChair(bridge, p.x, 0, p.z, p.rotY, chairTone);
@@ -7259,7 +8143,12 @@ export function buildShip(scene) {
     for (const lx of [-0.58, 0.58]) {
       const p = deskSeat(desk.x, desk.z, desk.rot, lx);
       makeChair(bridge, p.x, 0, p.z, p.rotY, chairTone);
-      if (desk.x > 0 && lx < 0) registerWorkSeat("rex", control, p.x, p.z, p.rotY, stageH);
+      let who = null;
+      if (desk.x > 0 && lx < 0) who = "rex";
+      else if (desk.x > 0 && lx > 0) who = "pax";
+      else if (desk.x < 0 && lx > 0) who = "aden";
+      else if (desk.x < 0 && lx < 0) who = "sable";
+      if (who) registerWorkSeat(who, control, p.x, p.z, p.rotY, stageH);
     }
   }
   makeBigScreen(control, anim, -7.5, 2.1, 2.2, 2.0, 1.4, Math.PI / 2);
@@ -7311,7 +8200,7 @@ export function buildShip(scene) {
       { side: "n", width: DW, leadsTo: "Corridor" },
       { side: "s", width: DW, leadsTo: "Corridor" },
       { side: "w", width: DW, leadsTo: "Hydroponic Garden" },
-      { side: "e", width: DW, leadsTo: "Kitchen" },
+      { side: "e", width: DW, leadsTo: "Diner" },
     ],
     floorColor: 0xc6ced8,
     label: "Hub",
@@ -7352,8 +8241,8 @@ export function buildShip(scene) {
     ceilingLight: hub.userData.ceilingLight ?? null,
     color: new THREE.Color(),
   };
-  makeDoorOverLabel(hub, "w", "G A R D E N");
-  makeDoorOverLabel(hub, "e", "D I N E R");
+  makeDoorOverLabel(hub, "w", "G A R D E N", {}, { mysteryTag: "garden", anim });
+  makeDoorOverLabel(hub, "e", "D I N E R", {}, { mysteryTag: "diner", anim });
   // SOS orange wall panel (west wall, south of garden door)
   decorateWallMonitors(hub, anim, [
     [-5.25, 2.2, -3.35, Math.PI / 2, 2.2, 1.35],
@@ -7399,7 +8288,7 @@ export function buildShip(scene) {
     cx: 11.5, cz: 4.5, w: 12, d: 11, h: H,
     doors: [{ side: "w", width: DW, leadsTo: "Hub" }],
     floorColor: 0xcbd2dc,
-    label: "Kitchen",
+    label: "Diner",
   });
   zones.push(conf.userData);
   // lounge couches — different colors, same centers, shorter so they don't overlap
@@ -7418,9 +8307,9 @@ export function buildShip(scene) {
   // one microwave on the counter (inset from the edge)
   makeMicrowave(conf, 4.92, 0.94, -2.25, -Math.PI / 2);
   // stove / oven / washer / dryer on south wall — clear of east wall
-  makeStove(conf, 2.1, 0, -4.85, 0, interactables, conf.position.x, conf.position.z);
+  const dinerStove = makeStove(conf, 2.1, 0, -4.85, 0, interactables, conf.position.x, conf.position.z);
   makeCooker(conf, 3.5, 0, -4.85, 0);
-  makeWashingMachine(conf, 4.45, 0, -4.85, 0);
+  const dinerWasher = makeWashingMachine(conf, 4.45, 0, -4.85, 0, conf.position.x, conf.position.z);
   makeDryer(conf, 5.17, 0, -4.85, 0);
   // dining table closer to west entrance — 5 chairs per side, mixed colors
   makeTable(conf, -2.6, 0, -3.0, 5.6, 1.35);
@@ -7433,6 +8322,15 @@ export function buildShip(scene) {
     makeChair(conf, x, 0, -4.0, 0, dinerChairColors[i + 5]);
     if (x === -0.4) registerWorkSeat("tess", conf, x, -2.0, Math.PI);
   });
+  anim.diner = {
+    stove: dinerStove,
+    washer: dinerWasher,
+    seat: WORK_SEATS.tess,
+    stoveStand: dinerStove.userData.stand,
+    washStand: dinerWasher.userData.stand,
+    stoveFace: Math.PI,
+    washFace: Math.PI,
+  };
   // neon script on south wall behind the dining table
   makeDeliciousNeon(conf, anim, -2.6, 2.75, -5.12);
   styleRoomLighting(conf, "conference");
@@ -7465,8 +8363,8 @@ export function buildShip(scene) {
     label: "Crew Deck",
   });
   zones.push(cross.userData);
-  makeDoorOverLabel(cross, "w", "D O R M");
-  makeDoorOverLabel(cross, "e", "W A S H R O O M");
+  makeDoorOverLabel(cross, "w", "D O R M", {}, { mysteryTag: "dorm", anim });
+  makeDoorOverLabel(cross, "e", "W A S H R O O M", {}, { mysteryTag: "washroom", anim });
   styleRoomLighting(cross, "crewDeck");
   enableSos(cross, anim);
 
@@ -7500,8 +8398,8 @@ export function buildShip(scene) {
     const bedN = makeBed(crew, bx, 0, 4.15, Math.PI, bedTones[i], interactables, crew.position.x, crew.position.z);
     const bedS = makeBed(crew, bx, 0, -4.15, 0, bedTones[i + 6], interactables, crew.position.x, crew.position.z);
     anim.beds.push(bedN, bedS);
-    const takeN = i !== 2 && i !== 5;
-    const takeS = i !== 1 && i !== 4;
+    const takeN = i !== 5;
+    const takeS = i !== 4;
     if (takeN) {
       const spec = CREW_ROSTER[anim.sleepingCrew.length];
       if (spec) {
@@ -7539,6 +8437,7 @@ export function buildShip(scene) {
   zones.push(toilets.userData);
 
   // 5 toilet + 5 shower slots — banks snug against N/S walls
+  anim.toiletSlots = [];
   makeStallBank(toilets, colliders, interactables, toiletsOx, toiletsOz, {
     cx: 2.0,
     cz: 3.25,
@@ -7547,7 +8446,9 @@ export function buildShip(scene) {
     depth: 2.05,
     rotY: Math.PI,
     kind: "toilet",
+    slotsOut: anim.toiletSlots,
   });
+  restorePrintedToilets(anim);
 
   makeStallBank(toilets, colliders, interactables, toiletsOx, toiletsOz, {
     cx: 2.0,
@@ -7583,12 +8484,29 @@ export function buildShip(scene) {
   // Sit in front of the glass (into the room) so the debug label is readable
   mirrorAnchor.position.set(sinkX, 1.95, -4.20);
   toilets.add(mirrorAnchor);
-  registerWallMonitor(anim, toilets, mirrorAnchor, {
+  const washWm = registerWallMonitor(anim, toilets, mirrorAnchor, {
     screenMat: mirrorGlass,
     barMats: [],
     ringMats: [],
     underGlowMat: mirrorFrame,
   }, { maxW: 2.6, maxH: 0.82, z: 0.06, y: -0.16, prominent: true });
+  const printHolo = makeToiletPrintHolo();
+  printHolo.position.set(0, -0.18, 0.07);
+  mirrorAnchor.add(printHolo);
+  anim.toiletPrint = { holo: printHolo, wm: washWm };
+  syncToiletPrintHolo(anim);
+  interactables.push({
+    kind: "toiletPrint",
+    position: new THREE.Vector3(toiletsOx + sinkX, 1.7, toiletsOz + sinkZ + 0.55),
+    radius: 2.2,
+    active() {
+      return !!anim.toiletPrint?.holo?.visible;
+    },
+    prompt() {
+      return "Press E · 3D print a toilet · 10 data points";
+    },
+    toggle() {},
+  });
   styleRoomLighting(toilets, "hygiene");
   enableSos(toilets, anim);
 
@@ -7603,7 +8521,7 @@ export function buildShip(scene) {
     label: "Engineering Access",
   });
   zones.push(corrE.userData);
-  makeDoorOverLabel(corrE, "s", "E N G I N E");
+  makeDoorOverLabel(corrE, "s", "E N G I N E", {}, { mysteryTag: "engine", anim });
   styleRoomLighting(corrE, "engAccess");
   enableSos(corrE, anim);
 
@@ -7642,6 +8560,11 @@ export function buildShip(scene) {
   makeConsole(engine, 5.2, 0, -0.5, -Math.PI / 2);
   makeChair(engine, 6.2, 0, -0.5, -Math.PI / 2, 0x8a9088);
   registerWorkSeat("kai", engine, 6.2, -0.5, -Math.PI / 2);
+  for (const av of anim.sleepingCrew) {
+    if (!isNpcActivated(av.userData.npcId)) continue;
+    if (av.userData.state === "sleeping") continue;
+    placeNpcAtWork(av, root);
+  }
   // SOS orange wall monitor on west wall (north of side console)
   decorateWallMonitors(engine, anim, [
     [-7.75, 2.45, 3.15, Math.PI / 2, 3.1, 1.75],
@@ -7666,6 +8589,14 @@ export function buildShip(scene) {
     for (const wm of anim.wallMonitors || []) {
       if (!wm.debugged || !wm.room) continue;
       const siblings = anim.wallMonitors.filter((m) => m.room === wm.room);
+      if (isCockpitMonitorRoom(wm.room) && siblings.some((m) => m.debugged)) {
+        for (const m of siblings) {
+          m.debugged = true;
+          applyWallMonitorVisual(m);
+        }
+        roomsDone.add(wm.room);
+        continue;
+      }
       if (siblings.every((m) => m.debugged)) roomsDone.add(wm.room);
     }
     for (const room of roomsDone) {
@@ -7674,7 +8605,9 @@ export function buildShip(scene) {
     refreshAllWallMonitors(anim);
     syncShipSosActive(anim);
     attachWallMonitorInteractables(anim, interactables, root);
+    syncToiletPrintHolo(anim);
   }
+  linkDoorOverLabels(anim, autoDoors);
 
   const interactPos = new THREE.Vector3(0, 2.35, 22 + 4.55);
   // Middle desk world XZ (bridge local z=1.4 on cockpit at cz=22)
@@ -7738,9 +8671,9 @@ export function downgradeMaterialsForMobile(root) {
             color: m.color ? m.color.clone() : 0xffffff,
             map: m.map || null,
             transparent: true,
-            opacity: cockpitGlass ? 0.58 : doorGlass ? 0.88 : Math.min(0.5, m.opacity ?? 0.45),
+            opacity: cockpitGlass ? 0.52 : doorGlass ? 0.88 : Math.min(0.5, m.opacity ?? 0.45),
             side: m.side ?? THREE.FrontSide,
-            depthWrite: doorGlass,
+            depthWrite: doorGlass && !cockpitGlass,
           });
           if (doorGlass) nm.userData.doorGlass = true;
           if (cockpitGlass) nm.userData.cockpitGlass = true;
@@ -7843,6 +8776,39 @@ export function pickStationLockedLine(work) {
   return raw.replace(/\{room\}/g, room);
 }
 
+export const TOILET_QUOTA_LINES = [
+  "To wake up more crew, you need to 3D-print a toilet first. Hygiene is already stretched.",
+  "To wake up more crew, you need to 3D-print a toilet first. The washroom cannot take another body yet.",
+  "To wake up more crew, you need to 3D-print a toilet first. Hygiene needs another bowl before I can thaw them.",
+  "To wake up more crew, you need to 3D-print a toilet first. Waste systems are at capacity.",
+  "To wake up more crew, you need to 3D-print a toilet first. Hygiene will not add a berth without a stall.",
+  "To wake up more crew, you need to 3D-print a toilet first. Print one on the washroom mirror.",
+  "To wake up more crew, you need to 3D-print a toilet first. The plumbing queue is full.",
+  "To wake up more crew, you need to 3D-print a toilet first. Hygiene locked the next wake slot.",
+  "To wake up more crew, you need to 3D-print a toilet first. We are short a toilet, not a bunk.",
+  "To wake up more crew, you need to 3D-print a toilet first. Sanitation will not share further.",
+  "To wake up more crew, you need to 3D-print a toilet first. The washroom is the bottleneck.",
+  "To wake up more crew, you need to 3D-print a toilet first. Hygiene flagged an overflow risk.",
+  "To wake up more crew, you need to 3D-print a toilet first. No spare stall, no extra crew.",
+  "To wake up more crew, you need to 3D-print a toilet first. Water reclaim is already tight.",
+  "To wake up more crew, you need to 3D-print a toilet first. Hygiene wants another fixture online.",
+  "To wake up more crew, you need to 3D-print a toilet first. The loo roster is full.",
+  "To wake up more crew, you need to 3D-print a toilet first. I cannot wake them into a dirty queue.",
+  "To wake up more crew, you need to 3D-print a toilet first. Hygiene protocol is blocking the thaw.",
+  "To wake up more crew, you need to 3D-print a toilet first. Add a bowl, then I can continue.",
+  "To wake up more crew, you need to 3D-print a toilet first. The washroom mirror can print the next one.",
+  "To wake up more crew, you need to 3D-print a toilet first. Grey-water load is maxed.",
+  "To wake up more crew, you need to 3D-print a toilet first. Hygiene will not certify another sleeper.",
+  "To wake up more crew, you need to 3D-print a toilet first. Stall count is the limit, not the beds.",
+  "To wake up more crew, you need to 3D-print a toilet first. Print, flush, then we wake the next.",
+];
+
+export function pickToiletQuotaLine() {
+  const list = TOILET_QUOTA_LINES;
+  return (list?.length ? list[(Math.random() * list.length) | 0] : "") ||
+    "To wake up more crew, you need to 3D-print a toilet first. Hygiene is already stretched.";
+}
+
 /** AI lines when the captain tries a sealed door (database still corrupt). */
 export const LOCKED_DOOR_LINES = [
   "Door command error. I can't open it.",
@@ -7895,28 +8861,28 @@ export const INSUFFICIENT_DATAPOINT_LINES = [
   "Insufficient data points. Clearance unpaid.",
 ];
 
-/** AI lines when the captain is bounced out of the south corridor (hub still undebugged). */
+/** AI lines when a shorting south-corridor field throws the captain back (hub still undebugged). */
 export const SOUTH_GATE_LINES = [
-  "Not safe ahead, Captain. Debug the Info Hub before you go south.",
-  "I pulled you back. The south pathway is still a hazard.",
-  "Crew spaces are unsafe until you debug the Info Hub.",
-  "Hold on. Restore the hub panel, then that corridor can open.",
-  "That way is dark and broken. Debug the Info Hub first.",
-  "South route is locked for safety. Fix the hub, then try again.",
-  "I can't let you through. The pathway still reads unsafe.",
-  "Turn around for now. The Info Hub needs a debug.",
-  "Don't walk south yet. Hub systems are still damaged.",
-  "I bounced you back on purpose. It is not safe ahead.",
-  "The way to crew is sealed until the hub is restored.",
-  "Hazard on the south line. Clear it from the hub wall panel.",
-  "Stay in the hub a moment. Debug that orange screen, then go south.",
-  "Lights and locks are wrong down there. Finish the hub debug first.",
-  "Captain, the south corridor waits on an Info Hub debug.",
-  "Pathway corrupt. Debug the hub so I can trust that route.",
-  "Not a shortcut. Repair the Info Hub, then the south path is yours.",
-  "I will keep sending you north until the hub is patched.",
-  "Crew deck is not ready. Debug the hub and reopen the pathway.",
-  "Safety first. Debug the Info Hub — then you may go south.",
+  "Force field spike. The south line is shorting until the Info Hub is debugged.",
+  "That was a field discharge. Hub wall monitor is still throwing faults.",
+  "Arc across the south threshold. Debug the Info Hub panel first.",
+  "Containment field misfired. Restore the hub screen, then that path should hold.",
+  "Short-circuit on the south gate. The orange hub monitor is still live.",
+  "Field anomaly shoved you back. Hub systems are still unstable.",
+  "Voltage dump in the corridor. Debug the Info Hub before you try south again.",
+  "The hatch field is stuttering. Clear the hub wall fault and it should drop.",
+  "Localized shock wall. Info Hub diagnostics are still in SOS.",
+  "That buzz is a failed containment grid. Hub panel still needs a debug.",
+  "South corridor field is looping. Patch the Info Hub monitor first.",
+  "Discharge from a broken force lattice. Hub screen is the source.",
+  "The field snapped. Debug that hub wall monitor to bleed the charge.",
+  "Shorted barrier ahead. Info Hub still reports an open fault.",
+  "Electromagnetic kick. The hub SOS panel is feeding that field.",
+  "Anomaly on the south line. Restore the Info Hub, then the grid should quiet.",
+  "Force field is arcing wild. Debug the hub monitor to cut the loop.",
+  "That was residual charge, not me. Hub wall still needs a debug.",
+  "Grid instability. Clear the Info Hub fault before the south path is safe.",
+  "The field collapsed and threw you. Hub diagnostics are still orange.",
 ];
 
 export function pickSouthGateLine() {

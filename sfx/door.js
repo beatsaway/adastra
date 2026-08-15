@@ -309,7 +309,7 @@ export function playCyberSuccess() {
   ping.stop(t0 + 0.55);
 }
 
-/** Sleep capsule open / close — short pneumatic hiss (higher than room doors). */
+/** Sleep capsule open / close — servo + hiss + latch. */
 export function playPodToggle(kind) {
   const ctx = getAudioCtx();
   if (!ctx) return;
@@ -321,39 +321,61 @@ export function playPodToggle(kind) {
   master.gain.value = 1;
   master.connect(ctx.destination);
 
+  const servo = ctx.createOscillator();
+  servo.type = "sawtooth";
+  if (opening) {
+    servo.frequency.setValueAtTime(210, t0);
+    servo.frequency.exponentialRampToValueAtTime(420, t0 + 0.22);
+  } else {
+    servo.frequency.setValueAtTime(380, t0);
+    servo.frequency.exponentialRampToValueAtTime(160, t0 + 0.2);
+  }
+  const slp = ctx.createBiquadFilter();
+  slp.type = "lowpass";
+  slp.frequency.value = opening ? 1400 : 900;
+  const sg = ctx.createGain();
+  sg.gain.setValueAtTime(0.0001, t0);
+  sg.gain.exponentialRampToValueAtTime(0.055, t0 + 0.012);
+  sg.gain.exponentialRampToValueAtTime(0.0001, t0 + (opening ? 0.28 : 0.24));
+  servo.connect(slp);
+  slp.connect(sg);
+  sg.connect(master);
+  servo.start(t0);
+  servo.stop(t0 + 0.3);
+
   const hiss = ctx.createBufferSource();
-  hiss.buffer = noiseBuffer(ctx, opening ? 0.38 : 0.28, "pink");
-  hiss.playbackRate.value = opening ? 1.35 : 0.92;
+  hiss.buffer = noiseBuffer(ctx, opening ? 0.4 : 0.3, "pink");
+  hiss.playbackRate.value = opening ? 1.28 : 0.88;
   const bp = ctx.createBiquadFilter();
   bp.type = "bandpass";
-  bp.Q.value = 0.55;
+  bp.Q.value = 0.6;
   if (opening) {
-    bp.frequency.setValueAtTime(720, t0);
-    bp.frequency.exponentialRampToValueAtTime(1680, t0 + 0.22);
+    bp.frequency.setValueAtTime(640, t0);
+    bp.frequency.exponentialRampToValueAtTime(1760, t0 + 0.24);
   } else {
-    bp.frequency.setValueAtTime(1400, t0);
-    bp.frequency.exponentialRampToValueAtTime(420, t0 + 0.2);
+    bp.frequency.setValueAtTime(1500, t0);
+    bp.frequency.exponentialRampToValueAtTime(380, t0 + 0.22);
   }
   const hg = ctx.createGain();
   hg.gain.setValueAtTime(0.0001, t0);
-  hg.gain.linearRampToValueAtTime(opening ? 0.11 : 0.13, t0 + 0.035);
-  hg.gain.exponentialRampToValueAtTime(0.0001, t0 + (opening ? 0.36 : 0.26));
+  hg.gain.linearRampToValueAtTime(opening ? 0.16 : 0.18, t0 + 0.03);
+  hg.gain.exponentialRampToValueAtTime(0.0001, t0 + (opening ? 0.4 : 0.3));
   hiss.connect(bp);
   bp.connect(hg);
   hg.connect(master);
   hiss.start(t0);
 
   const click = ctx.createOscillator();
-  click.type = "sine";
-  const cAt = opening ? 0.02 : 0.14;
-  click.frequency.setValueAtTime(opening ? 240 : 180, t0 + cAt);
-  click.frequency.exponentialRampToValueAtTime(opening ? 90 : 70, t0 + cAt + 0.08);
+  click.type = "triangle";
+  const cAt = opening ? 0.02 : 0.16;
+  click.frequency.setValueAtTime(opening ? 320 : 140, t0 + cAt);
+  click.frequency.exponentialRampToValueAtTime(opening ? 110 : 55, t0 + cAt + 0.09);
   const cg = ctx.createGain();
   cg.gain.setValueAtTime(0.0001, t0 + cAt);
-  cg.gain.linearRampToValueAtTime(0.045, t0 + cAt + 0.012);
-  cg.gain.exponentialRampToValueAtTime(0.0001, t0 + cAt + 0.1);
+  cg.gain.linearRampToValueAtTime(opening ? 0.07 : 0.09, t0 + cAt + 0.01);
+  cg.gain.exponentialRampToValueAtTime(0.0001, t0 + cAt + 0.12);
   click.connect(cg);
   cg.connect(master);
   click.start(t0 + cAt);
-  click.stop(t0 + cAt + 0.12);
+  click.stop(t0 + cAt + 0.14);
 }

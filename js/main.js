@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { buildShip, createSpaceView, createStatusView, updateAutoDoors, updateStallDoors, nearestInteractable, nearestLockedDoor, LOCKED_DOOR_LINES, INSUFFICIENT_DATAPOINT_LINES, pickStationLockedLine, pickRoomRestoredLine, pickSouthGateLine, pickCockpitExitLine, updateSosLights, updatePlants, updateSleepingCrew, updateAwakeCrew, updateSittingCrew, updateNpcChitchat, updateNpcWiggle, pokeWaitingNpc, waitingNpcFromHit, downgradeMaterialsForMobile, unlockShipDoor, relockAllShipDoors, clearShipBriefingProgress, debugWallMonitor, resetAllRoomSos, applyWallMonitorVisual, setWallMonitorSosBlend, updateWallMonitorSosPulse, toggleBedPod, setBedPodHover, isNpcWorkRoomLocked, bedFromHit, beginNpcWake, sleeperFromHit, resetSleepingCrew, pumpPendingSosRestore, updateHubFloorHalos, updateSouthCorridorGate } from "./ship.js?v=20260815dl";
+import { buildShip, createSpaceView, createStatusView, updateAutoDoors, updateStallDoors, nearestInteractable, nearestLockedDoor, LOCKED_DOOR_LINES, INSUFFICIENT_DATAPOINT_LINES, pickStationLockedLine, pickRoomRestoredLine, pickSouthGateLine, pickCockpitExitLine, pickToiletQuotaLine, updateSosLights, updatePlants, updateSleepingCrew, updateAwakeCrew, updateSittingCrew, updateNpcChitchat, updateNpcWiggle, pokeWaitingNpc, waitingNpcFromHit, downgradeMaterialsForMobile, unlockShipDoor, relockAllShipDoors, clearShipBriefingProgress, debugWallMonitor, resetAllRoomSos, applyWallMonitorVisual, setWallMonitorSosBlend, updateWallMonitorSosPulse, toggleBedPod, setBedPodHover, isNpcWorkRoomLocked, bedFromHit, beginNpcWake, sleeperFromHit, resetSleepingCrew, pumpPendingSosRestore, updateHubFloorHalos, updateSouthCorridorGate, printToiletInWashroom, resetPrintedToilets, toiletSlotsLeft, getFacilityBoard, getCrewBoard, wallMonitorsInSameRoom, roomDebugClearsAll } from "./ship.js?v=20260815em";
 import { createSosCeilingSparks, updateSosCeilingSparks } from "./sos-sparks.js?v=20260815dk";
 import { Player } from "./player.js?v=20260815ai";
 import { isTouchDevice, setupMobileControls } from "./mobile.js";
@@ -8,18 +8,21 @@ import {
   DOOR_UNLOCK_COST,
   MONITOR_DEBUG_COST,
   NPC_ACTIVATE_COST,
+  TOILET_PRINT_COST,
   fetchCollectedDatapoints,
   getSpentDatapoints,
   addSpentDatapoints,
   availableDatapoints,
   clearShipDatapointUsage,
   markMonitorDebugged,
-} from "./datapoints.js?v=adastra1000";
+  getActivatedNpcIds,
+  npcActivateQuota,
+} from "./datapoints.js?v=20260815ei";
 import { ShipScenes, SCENE } from "./scenes.js";
-import { createScene1Intro, applyCockpitShake } from "./scene1-intro.js?v=20260815cx";
-import { shipVoice } from "./ai-voice.js?v=20260815cj";
+import { createScene1Intro, applyCockpitShake } from "./scene1-intro.js?v=20260815ee";
+import { shipVoice } from "./ai-voice.js?v=20260815dr";
 import { createAiDrone } from "./ai-drone.js";
-import { ShipAmbience, ProximityTransformerHum, InfoHubHoloHiss, SleeperLevitateHum, HubHaloHum, playDoorOpen, playDoorClose, playDoorAuth, playCyberSuccess, playPodToggle, playHoloHover, playElectricShock, playHullRumble, playGlassDenied, playCeilingSpark, resumeAudio, playYearReveal, playYearCollapse, playYearHover, playYearPick } from "../sfx/index.js?v=20260815di";
+import { ShipAmbience, ProximityTransformerHum, InfoHubHoloHiss, SleeperLevitateHum, HubHaloHum, playDoorOpen, playDoorClose, playDoorAuth, playCyberSuccess, playPodToggle, playHoloHover, playElectricShock, playDigitalGlitch, playHullRumble, playGlassDenied, playCeilingSpark, resumeAudio, playYearReveal, playYearCollapse, playYearHover, playYearPick, playEnterShip } from "../sfx/index.js?v=20260815eg";
 
 const loaderEl = document.getElementById("loader");
 const loadBar = document.getElementById("load-bar");
@@ -30,6 +33,8 @@ const hud = document.getElementById("hud");
 const promptEl = document.getElementById("prompt");
 const yearFlashEl = document.getElementById("year-flash");
 const startBtn = document.getElementById("start-btn");
+const enterNote = document.getElementById("enter-note");
+const enterVeil = document.getElementById("enter-veil");
 const helpBtn = document.getElementById("help-btn");
 const displayOpt = document.getElementById("display-opt");
 const mobileRoot = document.getElementById("mobile-controls");
@@ -270,6 +275,11 @@ async function boot() {
   setProgress(100, "Ready");
   await wait(120);
 
+  if (enterNote) {
+    enterNote.textContent = "Collect data points to help rebuild the ship.";
+  }
+  if (startBtn) startBtn.textContent = "Enter Ship";
+
   loaderEl.classList.add("hidden");
   overlay.classList.remove("hidden");
 
@@ -406,6 +416,7 @@ async function boot() {
   let denyFlashFx = null;
   /** @type {object | null} */
   let hoveredDebugMonitor = null;
+  let hoveredToiletPrint = false;
   /** @type {object | null} */
   let hoveredBed = null;
   /** @type {{ wm: object, t: number, dur: number, bar: object, barMat: object, fullW: number } | null} */
@@ -490,7 +501,10 @@ async function boot() {
   function syncConsoleDatapoints() {
     const used = getSpentDatapoints();
     const avail = availableDatapoints(collectedDatapoints, used);
-    ship.mainScreen?.userData?.statusView?.setDatapointStats?.(used, avail);
+    const status = ship.mainScreen?.userData?.statusView;
+    status?.setDatapointStats?.(used, avail);
+    status?.setFacilityStats?.(getFacilityBoard(ship.anim, ship.autoDoors));
+    status?.setCrewStats?.(getCrewBoard(ship.anim));
   }
 
   async function refreshCollectedDatapoints() {
@@ -509,7 +523,8 @@ async function boot() {
       document.getElementById("unlock-confirm") ||
       document.getElementById("reset-confirm") ||
       document.getElementById("debug-confirm") ||
-      document.getElementById("npc-confirm")
+      document.getElementById("npc-confirm") ||
+      document.getElementById("toilet-print-confirm")
     );
   }
 
@@ -552,6 +567,125 @@ async function boot() {
 
   function closeNpcConfirm() {
     closeShipDialog("npc-confirm");
+  }
+
+  function closeToiletPrintConfirm() {
+    closeShipDialog("toilet-print-confirm");
+  }
+
+  function tryPrintToilet() {
+    if (anyShipDialogOpen()) return false;
+    if (!ship.anim?.toiletPrint?.holo?.visible) return false;
+    if (toiletSlotsLeft(ship.anim) <= 0) {
+      playGlassDenied();
+      shipVoice.trySpeak("Every extra stall already has a toilet.");
+      return true;
+    }
+    const used = getSpentDatapoints();
+    const avail = availableDatapoints(collectedDatapoints, used);
+    if (avail < TOILET_PRINT_COST) {
+      playGlassDenied();
+      shipVoice.trySpeak(pickInsufficientLine());
+      return true;
+    }
+    showToiletPrintConfirm();
+    return true;
+  }
+
+  function showToiletPrintConfirm() {
+    closeUnlockConfirm();
+    closeResetConfirm();
+    closeDebugConfirm();
+    closeNpcConfirm();
+    closeToiletPrintConfirm();
+    try {
+      if (document.pointerLockElement) document.exitPointerLock();
+    } catch (_) {}
+    const wrap = document.createElement("div");
+    wrap.id = "toilet-print-confirm";
+    wrap.className = "ship-confirm";
+    wrap.innerHTML =
+      '<div class="ship-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="toilet-print-title">' +
+      '<p id="toilet-print-title">Print a toilet for <strong>' +
+      TOILET_PRINT_COST +
+      " data points</strong>? Each extra toilet adds <strong>+2 crew capacity</strong>.</p>" +
+      '<div class="ship-confirm-actions">' +
+      '<button type="button" class="ship-confirm-yes" id="toilet-print-yes">Yes</button>' +
+      '<button type="button" class="ship-confirm-no" id="toilet-print-no">No</button>' +
+      "</div></div>";
+    wrap.addEventListener("click", (e) => {
+      if (e.target === wrap) closeToiletPrintConfirm();
+    });
+    document.body.appendChild(wrap);
+    syncConfirmCursor();
+    document.getElementById("toilet-print-no")?.addEventListener("click", () => {
+      closeToiletPrintConfirm();
+      if (!touchMode) {
+        try {
+          renderer.domElement.requestPointerLock();
+        } catch (_) {}
+      }
+    });
+    document.getElementById("toilet-print-yes")?.addEventListener("click", () => {
+      closeToiletPrintConfirm();
+      const used = getSpentDatapoints();
+      const avail = availableDatapoints(collectedDatapoints, used);
+      if (avail < TOILET_PRINT_COST) {
+        playGlassDenied();
+        shipVoice.trySpeak(pickInsufficientLine());
+      } else if (printToiletInWashroom(ship.anim)) {
+        addSpentDatapoints(TOILET_PRINT_COST);
+        syncConsoleDatapoints();
+        playCyberSuccess();
+        shipVoice.trySpeak("Toilet printed. Two more berths are open.");
+      }
+      if (!touchMode) {
+        try {
+          renderer.domElement.requestPointerLock();
+        } catch (_) {}
+      }
+    });
+    try {
+      document.getElementById("toilet-print-yes")?.focus();
+    } catch (_) {}
+  }
+
+  function pickToiletPrint(clientX, clientY) {
+    const holo = ship.anim?.toiletPrint?.holo;
+    if (!holo?.visible) return null;
+    if (clientX == null || clientY == null) {
+      unlockNdc.set(0, 0);
+    } else {
+      const rect = renderer.domElement.getBoundingClientRect();
+      unlockNdc.set(
+        ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
+        -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1
+      );
+    }
+    unlockRaycaster.setFromCamera(unlockNdc, camera);
+    unlockRaycaster.far = 4.6;
+    const hits = unlockRaycaster.intersectObject(holo, false);
+    unlockRaycaster.far = Infinity;
+    if (!hits.length || hits[0].distance > 4.6) return null;
+    return holo;
+  }
+
+  function setToiletPrintHover(on) {
+    const h = ship.anim?.toiletPrint?.holo;
+    if (!h?.material) {
+      hoveredToiletPrint = false;
+      return;
+    }
+    if (on && !hoveredToiletPrint) playHoloHover();
+    hoveredToiletPrint = !!on;
+    if (on) {
+      if (h.userData.hoverMap) h.material.map = h.userData.hoverMap;
+      h.material.opacity = h.userData.hoverOpacity ?? 0.98;
+    } else {
+      if (h.userData.baseMap) h.material.map = h.userData.baseMap;
+      h.material.opacity = h.userData.baseOpacity ?? 0.62;
+    }
+    h.material.needsUpdate = true;
   }
 
   function showUnlockConfirm(door) {
@@ -651,8 +785,10 @@ async function boot() {
     clearDebugTween();
     closeDebugConfirm();
     closeNpcConfirm();
+    closeToiletPrintConfirm();
     hoveredUnlockDoor = null;
     hoveredDebugMonitor = null;
+    hoveredToiletPrint = false;
     hoveredDeskOption = null;
     lockedDoorKey = null;
     lockedDoorLine = null;
@@ -664,6 +800,7 @@ async function boot() {
     relockAllShipDoors(ship.autoDoors);
     resetAllRoomSos(ship.anim);
     resetSleepingCrew(ship.anim, ship.root);
+    resetPrintedToilets(ship.anim);
     const ud = ship.mainScreen.userData;
     ud.statusView?.reset?.();
     setMainScreenMode(ship, "default");
@@ -1088,6 +1225,12 @@ async function boot() {
     }
     addSpentDatapoints(MONITOR_DEBUG_COST);
     markMonitorDebugged(wm.id);
+    if (roomDebugClearsAll(wm)) {
+      for (const m of wallMonitorsInSameRoom(wm, ship.anim)) {
+        markMonitorDebugged(m.id);
+        if (m !== wm && m.debugHolo) m.debugHolo.visible = false;
+      }
+    }
     playDoorAuth();
     syncConsoleDatapoints();
     setDebugMonitorHover(null);
@@ -1166,6 +1309,7 @@ async function boot() {
       shipVoice.trySpeak("Monitor debug accepted. Panel restored to nominal.");
     }
     maybeReleaseCockpitScene();
+    syncConsoleDatapoints();
   }
 
   function clearDebugTween() {
@@ -1331,6 +1475,11 @@ async function boot() {
       shipVoice.trySpeak(pickStationLockedLine(av.userData.npcWork));
       return true;
     }
+    if (getActivatedNpcIds().length >= npcActivateQuota()) {
+      playGlassDenied();
+      shipVoice.trySpeak(pickToiletQuotaLine());
+      return true;
+    }
     const used = getSpentDatapoints();
     const avail = availableDatapoints(collectedDatapoints, used);
     if (avail < NPC_ACTIVATE_COST) {
@@ -1390,10 +1539,13 @@ async function boot() {
       } else if (isNpcWorkRoomLocked(av.userData.npcWork, ship.autoDoors)) {
         playGlassDenied();
         shipVoice.trySpeak(pickStationLockedLine(av.userData.npcWork));
+      } else if (getActivatedNpcIds().length >= npcActivateQuota()) {
+        playGlassDenied();
+        shipVoice.trySpeak(pickToiletQuotaLine());
       } else {
         addSpentDatapoints(NPC_ACTIVATE_COST);
-        syncConsoleDatapoints();
         beginNpcWake(av, ship.root);
+        syncConsoleDatapoints();
         playCyberSuccess();
       }
       if (!touchMode) {
@@ -1429,6 +1581,10 @@ async function boot() {
     if (!player.locked) return;
     const stall = nearestInteractable(ship.interactables, player.position);
     if (!stall || stall.kind === "wallMonitor") return;
+    if (stall.kind === "toiletPrint") {
+      tryPrintToilet();
+      return;
+    }
     stall.toggle();
     // Main screen modes = desk 3D option planes (crosshair click)
   }
@@ -1440,19 +1596,19 @@ async function boot() {
     })
     : null;
 
-  function enter() {
+  let enteringShip = false;
+
+  function beginPlayAfterVeil() {
     overlay.classList.add("hidden");
     hud.classList.remove("hidden");
     skipDeltas = 3;
     clock.getDelta();
     void shipVoice.ensureCtx();
-    void resumeAudio().then(() => {
-      ambience.start();
-      void boxHum.ensure();
-      void hubHoloHiss.ensure();
-      void sleeperHoverHum.ensure();
-      void hubHaloHum.ensure();
-    });
+    ambience.start();
+    void boxHum.ensure();
+    void hubHoloHiss.ensure();
+    void sleeperHoverHum.ensure();
+    void hubHaloHum.ensure();
     // Enter Ship → Scene 1 (cockpit lockdown until briefing completes)
     beginScene1();
     ship.mainScreen.userData.statusView?.start?.();
@@ -1470,6 +1626,24 @@ async function boot() {
       player.setLocked(true);
       renderer.domElement.requestPointerLock();
     }
+    requestAnimationFrame(() => {
+      enterVeil?.classList.add("revealing");
+      enterVeil?.classList.remove("covering");
+    });
+  }
+
+  function enter() {
+    if (enteringShip) return;
+    enteringShip = true;
+    if (startBtn) startBtn.disabled = true;
+    void resumeAudio().then(() => playEnterShip());
+    if (!enterVeil) {
+      beginPlayAfterVeil();
+      return;
+    }
+    enterVeil.classList.remove("revealing");
+    enterVeil.classList.add("covering");
+    window.setTimeout(beginPlayAfterVeil, 560);
   }
 
   startBtn.addEventListener("click", enter);
@@ -1519,6 +1693,13 @@ async function boot() {
           tryDebugWallMonitor(debugMon);
           return;
         }
+        const printHolo = touchMode
+          ? pickToiletPrint(e.clientX, e.clientY)
+          : pickToiletPrint(null, null);
+        if (printHolo) {
+          tryPrintToilet();
+          return;
+        }
         const unlockDoor = touchMode
           ? pickUnlockDoor(e.clientX, e.clientY)
           : pickUnlockDoor(null, null);
@@ -1564,6 +1745,7 @@ async function boot() {
       if (deskOpt) {
         setUnlockHover(null);
         setDebugMonitorHover(null);
+        setToiletPrintHover(false);
         setBedHover(null);
         setDeskHover(deskOpt);
         return;
@@ -1575,10 +1757,21 @@ async function boot() {
       if (debugMon) {
         setUnlockHover(null);
         setBedHover(null);
+        setToiletPrintHover(false);
         setDebugMonitorHover(debugMon);
         return;
       }
       setDebugMonitorHover(null);
+      const printHolo = lockedPtr
+        ? pickToiletPrint(null, null)
+        : pickToiletPrint(e.clientX, e.clientY);
+      if (printHolo) {
+        setUnlockHover(null);
+        setBedHover(null);
+        setToiletPrintHover(true);
+        return;
+      }
+      setToiletPrintHover(false);
       const door = lockedPtr
         ? pickUnlockDoor(null, null)
         : pickUnlockDoor(e.clientX, e.clientY);
@@ -1614,6 +1807,10 @@ async function boot() {
         const debugMon = pickDebugMonitor(e.clientX, e.clientY);
         if (debugMon) {
           tryDebugWallMonitor(debugMon);
+          return;
+        }
+        if (pickToiletPrint(e.clientX, e.clientY)) {
+          tryPrintToilet();
           return;
         }
         const unlockDoor = pickUnlockDoor(e.clientX, e.clientY);
@@ -1666,6 +1863,10 @@ async function boot() {
         closeNpcConfirm();
         return;
       }
+      if (document.getElementById("toilet-print-confirm")) {
+        closeToiletPrintConfirm();
+        return;
+      }
       if (document.getElementById("reset-confirm")) {
         closeResetConfirm();
         return;
@@ -1703,11 +1904,13 @@ async function boot() {
     }
     for (let i = 0; i < anim.bars.length; i++) {
       const b = anim.bars[i];
+      if (b.userData?.wallMonitor) continue;
       if (!b.visible || (mainDeco && !mainDeco.visible && mainDeco.children.includes(b))) continue;
       b.scale.x = 0.55 + 0.45 * Math.abs(Math.sin(t * 2.2 + i * 0.7));
     }
     for (let i = 0; i < (anim.screenRings || []).length; i++) {
       const r = anim.screenRings[i];
+      if (r.userData?.wallMonitor) continue;
       if (mainDeco && !mainDeco.visible && mainDeco.children.includes(r)) continue;
       const speed = r.userData.spinSpeed ?? (0.35 + i * 0.4) * (i % 2 ? -1 : 1);
       r.rotation.z = t * speed;
@@ -1722,12 +1925,6 @@ async function boot() {
       hn.color.setHSL((t * 0.12) % 1, 0.95, 0.48);
       if (hn.holo?.emissive) hn.holo.emissive.copy(hn.color);
       hn.light.color.copy(hn.color);
-      if (hn.floor) {
-        // darker floor than ceiling / accents
-        hn.floor.color.setHSL((t * 0.12) % 1, 0.88, 0.16);
-        hn.floor.emissive.setHSL((t * 0.12) % 1, 0.88, 0.14);
-        hn.floor.emissiveIntensity = 0.55 + Math.sin(t * 2.0) * 0.1;
-      }
       if (hn.ceiling) {
         hn.ceiling.color.copy(hn.color);
         hn.ceiling.emissive.copy(hn.color);
@@ -1765,6 +1962,11 @@ async function boot() {
       if (!h?.visible || !h.material || wm === hoveredDebugMonitor) continue;
       const base = h.userData.baseOpacity ?? 0.55;
       h.material.opacity = base + Math.sin(t * 1.6) * 0.04;
+    }
+    const printHolo = anim.toiletPrint?.holo;
+    if (printHolo?.visible && printHolo.material && !hoveredToiletPrint) {
+      const base = printHolo.userData.baseOpacity ?? 0.62;
+      printHolo.material.opacity = base + Math.sin(t * 1.8) * 0.05;
     }
     // Wall monitor colors are set on state change only (not every frame)
     for (const l of anim.engineLights) {
@@ -1806,17 +2008,30 @@ async function boot() {
     }
     const t = clock.elapsedTime;
     frame += 1;
-    player.update(dt);
+    const tossing = !!ship.anim?.southGate?.toss;
+    if (tossing) {
+      player.stickX = 0;
+      player.stickY = 0;
+      player.lookStickX = 0;
+      player.lookStickY = 0;
+    } else {
+      player.update(dt);
+    }
     if (updateSouthCorridorGate(ship.anim, player, dt)) {
       playElectricShock();
-      shockShakeT = SHOCK_SHAKE_DUR;
+      playDigitalGlitch();
       const line = pickSouthGateLine();
       setTimeout(() => shipVoice.trySpeak(line), 280);
     }
-    scene1Intro.applyShake(camera, t);
+    const tossingNow = !!ship.anim?.southGate?.toss;
+    if (!tossingNow) {
+      scene1Intro.applyShake(camera, t);
+    }
     if (shockShakeT > 0) {
       shockShakeT = Math.max(0, shockShakeT - dt);
-      applyCockpitShake(camera, t, shockShakeT / SHOCK_SHAKE_DUR);
+      if (!tossingNow) {
+        applyCockpitShake(camera, t, shockShakeT / SHOCK_SHAKE_DUR);
+      }
     }
     {
       const wantRumble =
@@ -1835,7 +2050,9 @@ async function boot() {
       }
       if (sosRumbleT > 0) {
         sosRumbleT = Math.max(0, sosRumbleT - dt);
-        applyCockpitShake(camera, t, sosRumbleT / SOS_RUMBLE_DUR);
+        if (!tossingNow) {
+          applyCockpitShake(camera, t, sosRumbleT / SOS_RUMBLE_DUR);
+        }
       }
     }
     scenes.update();
@@ -1942,16 +2159,33 @@ async function boot() {
     updateDebugRepair(dt);
     updateDeskOptionsVisibility();
     {
-      const inHub = roomAtPlayer()?.label === "Hub";
+      const here = roomAtPlayer()?.label;
+      const inHub = here === "Hub";
+      const inCockpit =
+        here === "Cockpit" || scenes.isActive(SCENE.COCKPIT_BRIEFING);
       const px = player.position.x;
       const py = player.position.y + 1.2;
       const pz = player.position.z;
       const nearR2 = 5.5 * 5.5;
       let hubHoloDist = 99;
       for (const holo of ship.anim?.infoHubHolos || []) {
-        // Inside the hub, hide the north doorway label — keep the south-path INFO HUB readable
-        if (inHub && !holo.userData?.infoHubFromSouth) {
+        // Inside the hub the doorway labels are only noise
+        if (inHub) {
           holo.visible = false;
+          continue;
+        }
+        // From the cockpit, keep the far hub-door INFO HUB label on
+        if (inCockpit) {
+          holo.visible = !holo.userData?.infoHubFromSouth;
+          if (holo.visible) {
+            holo.getWorldPosition(holoWorldPos);
+            const d3 = Math.hypot(
+              holoWorldPos.x - px,
+              holoWorldPos.y - py,
+              holoWorldPos.z - pz
+            );
+            if (d3 < hubHoloDist) hubHoloDist = d3;
+          }
           continue;
         }
         holo.getWorldPosition(holoWorldPos);
@@ -1991,10 +2225,14 @@ async function boot() {
         const dz = holoWorldPos.z - pz;
         h.visible = dx * dx + dz * dz <= nearR2;
       }
-      // Door lintel glow labels (GARDEN / DINER / …) — hide when far
+      // Door lintel glow labels — hide when far; sealed rooms stay unnamed
       if (ship.root && (frame & 3) === 0) {
         ship.root.traverse((o) => {
           if (!o?.userData?.doorOverLabel) return;
+          if (o.userData.mysteryUntilUnlock && !o.userData.labelRevealed) {
+            o.visible = false;
+            return;
+          }
           o.getWorldPosition(holoWorldPos);
           const dx = holoWorldPos.x - px;
           const dz = holoWorldPos.z - pz;
@@ -2002,14 +2240,21 @@ async function boot() {
         });
       }
     }
+    const hubStillSos = (ship.anim.sosRooms || []).some(
+      (r) =>
+        r?.userData?.label === "Hub" && r.userData.lightMode === "sos"
+    );
     if (ship.anim.sosActive && (!mobileQuality || (frame & 1) === 0)) {
-      const hubStillSos = (ship.anim.sosRooms || []).some(
-        (r) =>
-          r?.userData?.label === "Hub" && r.userData.lightMode === "sos"
-      );
       updateSosLights(ship.anim.sosRooms, t, ship.anim.hubNeon, hubStillSos);
     }
-    updateWallMonitorSosPulse(ship.anim, t);
+    // Hub floor keeps cycling hue after the hub itself is restored (even if other rooms are SOS)
+    const hubFloor = ship.anim?.hubNeon?.floor;
+    if (hubFloor && !hubStillSos) {
+      hubFloor.color.setHSL((t * 0.12) % 1, 0.88, 0.16);
+      if (hubFloor.emissive) hubFloor.emissive.setHSL((t * 0.12) % 1, 0.88, 0.14);
+      hubFloor.emissiveIntensity = 0.55 + Math.sin(t * 2.0) * 0.1;
+    }
+    updateWallMonitorSosPulse(ship.anim, t, player.position, ship.autoDoors);
     updateSosCeilingSparks(sosSparks, dt, roomAtPlayer(), player.position, {
       active: player.locked && !yearTransit,
       mobile: mobileQuality,
@@ -2028,7 +2273,7 @@ async function boot() {
       }
       sleeperHoverHum.update(dt, hoverT);
     }
-    updateAwakeCrew(ship.anim?.sleepingCrew, dt, t, ship.autoDoors, player.position);
+    updateAwakeCrew(ship.anim?.sleepingCrew, dt, t, ship.autoDoors, player.position, ship.anim);
     updateSittingCrew(ship.anim?.sleepingCrew, dt, t, player.position);
     updateNpcChitchat(ship.anim?.sleepingCrew, dt, player.position);
     updateNpcWiggle(ship.anim?.sleepingCrew, dt);

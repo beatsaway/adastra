@@ -1,12 +1,15 @@
 /**
  * Ship data-point wallet (Ad Astra demo).
- * Starts with 1000 available — no curriculum API required.
+ * Starts with 1000 available — no curriculum API or login required.
  * Door unlock / wall-monitor debug cost is fixed at 30.
  */
 
 export const DOOR_UNLOCK_COST = 30;
 export const MONITOR_DEBUG_COST = 30;
 export const NPC_ACTIVATE_COST = 30;
+export const TOILET_PRINT_COST = 10;
+export const NPC_QUOTA_BASE = 4;
+export const NPC_QUOTA_PER_TOILET = 2;
 
 /** Demo starting balance (available before any spend). */
 export const DEMO_STARTING_DATAPOINTS = 1000;
@@ -15,6 +18,7 @@ const SPENT_KEY = "adastra-ship-dp-spent";
 const UNLOCKED_KEY = "adastra-ship-unlocked-doors";
 const DEBUGGED_MONITORS_KEY = "adastra-ship-debugged-monitors";
 const ACTIVATED_NPC_KEY = "adastra-ship-activated-npcs";
+const PRINTED_TOILETS_KEY = "adastra-ship-printed-toilets";
 
 export function datapointsForPct(pct) {
   const p = Number(pct);
@@ -104,6 +108,28 @@ export function isNpcActivated(id) {
   return !!id && getActivatedNpcIds().includes(String(id));
 }
 
+export function getPrintedToiletCount() {
+  try {
+    const n = Number(localStorage.getItem(PRINTED_TOILETS_KEY) || 0);
+    return Number.isFinite(n) && n > 0 ? Math.min(4, Math.floor(n)) : 0;
+  } catch (_) {
+    return 0;
+  }
+}
+
+export function addPrintedToilet() {
+  const next = Math.min(4, getPrintedToiletCount() + 1);
+  try {
+    localStorage.setItem(PRINTED_TOILETS_KEY, String(next));
+  } catch (_) {}
+  return next;
+}
+
+/** Default toilet = 4 crew. Each printed toilet adds 2 more. */
+export function npcActivateQuota() {
+  return NPC_QUOTA_BASE + getPrintedToiletCount() * NPC_QUOTA_PER_TOILET;
+}
+
 export function markNpcActivated(id) {
   if (!id) return;
   const set = new Set(getActivatedNpcIds());
@@ -113,27 +139,9 @@ export function markNpcActivated(id) {
   } catch (_) {}
 }
 
-/**
- * Ad Astra demo wallet: always start from DEMO_STARTING_DATAPOINTS.
- * Optional /api/scores can only raise the total further.
- */
+/** Ad Astra demo wallet: always start from DEMO_STARTING_DATAPOINTS. */
 export async function fetchCollectedDatapoints() {
-  let fromApi = 0;
-  try {
-    const res = await fetch("/api/scores", { credentials: "same-origin" });
-    if (res.ok) {
-      const data = await res.json();
-      if (typeof data.totalDatapoints === "number") {
-        fromApi = Math.max(0, Math.floor(data.totalDatapoints));
-      } else {
-        const scores = Array.isArray(data.scores) ? data.scores : [];
-        fromApi = scores.reduce((sum, s) => sum + datapointsForPct(s.pct), 0);
-      }
-    }
-  } catch (_) {
-    /* standalone demo — no API is fine */
-  }
-  return Math.max(DEMO_STARTING_DATAPOINTS, fromApi);
+  return DEMO_STARTING_DATAPOINTS;
 }
 
 export function availableDatapoints(collected, spent = getSpentDatapoints()) {
@@ -150,5 +158,6 @@ export function clearShipDatapointUsage() {
     localStorage.removeItem(UNLOCKED_KEY);
     localStorage.removeItem(DEBUGGED_MONITORS_KEY);
     localStorage.removeItem(ACTIVATED_NPC_KEY);
+    localStorage.removeItem(PRINTED_TOILETS_KEY);
   } catch (_) {}
 }

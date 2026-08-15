@@ -2,6 +2,7 @@
  * Scene 1 solar-wind clip on the cockpit main screen, before the AI script.
  */
 import * as THREE from "three";
+import { playScene1EnergyField, stopScene1EnergyField } from "../sfx/scene1-field.js?v=20260815ed";
 
 const SRC = "scene/scene1.mp4?v=20260815bl";
 
@@ -56,6 +57,7 @@ export function createScene1Intro() {
     if (!playing) return;
     playing = false;
     cleanupTimer();
+    stopScene1EnergyField();
     try {
       video.pause();
     } catch (_) {}
@@ -88,6 +90,7 @@ export function createScene1Intro() {
       } catch (_) {}
       // Clip is ~3.6s at 0.5x (~7.2s); fail open if ended never fires.
       timeoutId = setTimeout(finish, 16000);
+      playScene1EnergyField();
       const start = video.play();
       if (start && typeof start.then === "function") {
         start.catch(() => {
@@ -97,12 +100,13 @@ export function createScene1Intro() {
       }
     },
     stop() {
-      playing = false;
-      cleanupTimer();
-      onDone = null;
-      try {
-        video.pause();
-      } catch (_) {}
+    playing = false;
+    cleanupTimer();
+    onDone = null;
+    stopScene1EnergyField();
+    try {
+      video.pause();
+    } catch (_) {}
     },
   };
 }

@@ -15,6 +15,8 @@ const VOICES = {
   kai: { base: 135, click: 0.42, wet: 0.18, growl: 0.55 },
   lila: { base: 310, click: 0.58, wet: 0.16, growl: 0.1 },
   aden: { base: 185, click: 0.2, wet: 0.48, growl: 0.18 },
+  sable: { base: 255, click: 0.16, wet: 0.44, growl: 0.14 },
+  pax: { base: 160, click: 0.28, wet: 0.3, growl: 0.32 },
   crew: { base: 250, click: 0.3, wet: 0.35, growl: 0.22 },
 };
 

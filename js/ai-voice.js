@@ -4,7 +4,7 @@
  * (SpeechSynthesis has no Web Audio volume — boundaries are the simple sync).
  */
 
-import { playAlienTalk, stopAlienTalk } from "../sfx/alien-talk.js?v=20260815cd";
+import { playAlienTalk, stopAlienTalk } from "../sfx/alien-talk.js?v=20260815dr";
 
 function normalizeLine(text) {
   return String(text || "")
