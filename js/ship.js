@@ -7991,7 +7991,28 @@ function isInfoHubDebugged(anim) {
   return mons.length > 0 && mons.every((m) => m.debugged);
 }
 
-/** Cyan laser bars in the same hole a south-hub door would use. */
+function makeLaserFenceTex() {
+  const c = document.createElement("canvas");
+  c.width = 256;
+  c.height = 16;
+  const ctx = c.getContext("2d");
+  const g = ctx.createLinearGradient(0, 0, 256, 0);
+  g.addColorStop(0, "rgba(0, 230, 255, 0)");
+  g.addColorStop(0.1, "rgba(60, 240, 255, 0.12)");
+  g.addColorStop(0.28, "rgba(110, 250, 255, 0.42)");
+  g.addColorStop(0.5, "rgba(180, 255, 255, 0.58)");
+  g.addColorStop(0.72, "rgba(110, 250, 255, 0.42)");
+  g.addColorStop(0.9, "rgba(60, 240, 255, 0.12)");
+  g.addColorStop(1, "rgba(0, 230, 255, 0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 256, 16);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+/** Soft cyan laser bars in the same hole a south-hub door would use. */
 function makeForceFieldFence(room, anim, { localX = 0, localZ, gw, h }) {
   if (!anim) return null;
   if (!anim.southGate) anim.southGate = { toss: null };
@@ -8001,18 +8022,25 @@ function makeForceFieldFence(room, anim, { localX = 0, localZ, gw, h }) {
   g.position.set(localX, holeY, localZ);
   room.add(g);
   const mat = new THREE.MeshBasicMaterial({
-    color: 0x00ffff,
+    map: makeLaserFenceTex(),
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0.7,
+    depthWrite: false,
+    side: THREE.DoubleSide,
     toneMapped: false,
+    blending: THREE.AdditiveBlending,
   });
-  const w = holeW * 0.9;
+  const w = holeW * 0.92;
   const rows = 6;
   const span = holeH * 0.72;
   for (let i = 0; i < rows; i++) {
     const y = -span / 2 + (span / (rows - 1)) * i;
-    const bar = new THREE.Mesh(new THREE.BoxGeometry(w, 0.07, 0.08), mat);
+    const bar = new THREE.Mesh(new THREE.PlaneGeometry(w, 0.055), mat);
     bar.position.set(0, y, 0);
     bar.castShadow = false;
     bar.receiveShadow = false;
+    bar.renderOrder = 3;
     g.add(bar);
   }
   anim.southGate.fence = { mesh: g, mat };
