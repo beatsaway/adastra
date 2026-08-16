@@ -3,7 +3,7 @@
  * Scheduled once on play — no per-frame work.
  */
 
-import { getAudioCtx, resumeAudio } from "./ctx.js";
+import { getAudioCtx, resumeAudio, busOut } from "./ctx.js?v=20260817al";
 
 let _noise = null;
 let _master = null;
@@ -66,7 +66,7 @@ export function playScene1EnergyField() {
   master.gain.exponentialRampToValueAtTime(1, t0 + 0.28);
   master.gain.setValueAtTime(1, t0 + dur - 1.15);
   master.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-  master.connect(ctx.destination);
+  master.connect(busOut("sfx") || ctx.destination);
   _master = master;
   _stopAt = t0 + dur + 0.05;
 

@@ -2,7 +2,7 @@
  * Waiting-NPC toys — CRT think ticks + metallic poke bonk.
  */
 
-import { getAudioCtx, resumeAudio } from "./ctx.js";
+import { getAudioCtx, resumeAudio, busOut } from "./ctx.js?v=20260817al";
 
 function rand(a, b) {
   return a + Math.random() * (b - a);
@@ -18,7 +18,7 @@ export function playThinkDot(count = 1) {
 
   const master = ctx.createGain();
   master.gain.value = 1;
-  master.connect(ctx.destination);
+  master.connect(busOut("sfx") || ctx.destination);
 
   const osc = ctx.createOscillator();
   osc.type = "sine";
@@ -47,7 +47,7 @@ export function playNpcBonk() {
 
   const master = ctx.createGain();
   master.gain.value = 1;
-  master.connect(ctx.destination);
+  master.connect(busOut("sfx") || ctx.destination);
 
   const n = Math.max(1, Math.floor(ctx.sampleRate * 0.12));
   const buf = ctx.createBuffer(1, n, ctx.sampleRate);
@@ -97,7 +97,7 @@ export function playNpcGearFrenzy(seconds = 2.6) {
 
   const master = ctx.createGain();
   master.gain.value = 1;
-  master.connect(ctx.destination);
+  master.connect(busOut("sfx") || ctx.destination);
 
   const whir = ctx.createOscillator();
   whir.type = "sawtooth";

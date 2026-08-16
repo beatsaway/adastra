@@ -2,7 +2,7 @@
  * Scene 1 briefing — digital channel-open tone when the script starts.
  */
 
-import { getAudioCtx, resumeAudio } from "./ctx.js";
+import { getAudioCtx, resumeAudio, busOut } from "./ctx.js?v=20260817al";
 
 /** Short digital priority-channel chirp (square beeps + soft sweep). */
 export function playBriefStart() {
@@ -13,7 +13,7 @@ export function playBriefStart() {
   const t0 = ctx.currentTime;
   const master = ctx.createGain();
   master.gain.value = 1;
-  master.connect(ctx.destination);
+  master.connect(busOut("sfx") || ctx.destination);
 
   // Soft rising sweep under the beeps
   const sweep = ctx.createOscillator();

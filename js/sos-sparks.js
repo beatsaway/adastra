@@ -255,9 +255,39 @@ function pickMonitorOrigin(monitors, room) {
   };
 }
 
-function spawnBurst(sys, room, px, pz, monitors) {
+function pickEngineRodOrigin(rods) {
+  if (!rods?.length) return null;
+  let pick = null;
+  let n = 0;
+  for (let i = 0; i < rods.length; i++) {
+    const rod = rods[i];
+    if (!rod?.core || rod.repaired) continue;
+    n += 1;
+    if (Math.random() * n < 1) pick = rod;
+  }
+  if (!pick) return null;
+  pick.core.getWorldPosition(_wp);
+  const sc = pick.scale || 1;
+  const ang = Math.random() * Math.PI * 2;
+  const rr = (0.92 + Math.random() * 0.14) * sc;
+  const nx = Math.cos(ang);
+  const nz = Math.sin(ang);
+  return {
+    x: _wp.x + nx * rr,
+    y: _wp.y + (Math.random() * 1.5 - 0.15) * sc,
+    z: _wp.z + nz * rr,
+    nx,
+    ny: 0.22,
+    nz,
+    monitor: true,
+  };
+}
+
+function spawnBurst(sys, room, px, pz, monitors, rods) {
   let o = null;
-  if (monitors && Math.random() < 0.58) o = pickMonitorOrigin(monitors, room);
+  const roll = Math.random();
+  if (rods && roll < 0.42) o = pickEngineRodOrigin(rods);
+  if (!o && monitors && roll < 0.72) o = pickMonitorOrigin(monitors, room);
   if (!o) o = pickOrigin(room, px, pz);
   if (!o) return -1;
   const cool = Math.random() > 0.5 ? 1 : 0;
@@ -285,6 +315,7 @@ function spawnBurst(sys, room, px, pz, monitors) {
 /** Extra burst at a world point (force-field hit). Same particle pool. */
 export function burstSparksAt(sys, x, y, z, opts = {}) {
   if (!sys) return;
+  sys.group.visible = true;
   const cool = 0;
   const scale = opts.scale ?? 0.62;
   const nx = opts.nx;
@@ -318,9 +349,10 @@ export function updateSosCeilingSparks(sys, dt, room, playerPos, opts = {}) {
     if (sys.wait <= 0) {
       sys.wait = mobile ? 0.75 + Math.random() * 1.2 : 0.4 + Math.random() * 0.9;
       const mons = opts.monitors || null;
-      const a = spawnBurst(sys, room, playerPos.x, playerPos.z, mons);
+      const rods = opts.engineRods || null;
+      const a = spawnBurst(sys, room, playerPos.x, playerPos.z, mons, rods);
       const b = Math.random() < 0.5
-        ? spawnBurst(sys, room, playerPos.x, playerPos.z, mons)
+        ? spawnBurst(sys, room, playerPos.x, playerPos.z, mons, rods)
         : null;
       const hit = a && a.dist >= 0 && a.dist < 11 ? a : (b && b.dist >= 0 && b.dist < 11 ? b : null);
       if (hit && sys.onBurst && (hit.monitor || Math.random() < 0.5)) {

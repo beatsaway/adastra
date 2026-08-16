@@ -4,7 +4,7 @@
  * - Close: short wet hydraulic (playback sped up)
  */
 
-import { getAudioCtx, resumeAudio } from "./ctx.js";
+import { getAudioCtx, resumeAudio, busOut } from "./ctx.js?v=20260817al";
 
 function noiseBuffer(ctx, seconds = 0.4, flavor = "pink") {
   const n = Math.max(1, Math.floor(ctx.sampleRate * seconds));
@@ -40,7 +40,7 @@ export function playDoorOpen() {
   const gain = 0.26;
   const master = ctx.createGain();
   master.gain.value = 1;
-  master.connect(ctx.destination);
+  master.connect(busOut("sfx") || ctx.destination);
 
   const thump = ctx.createOscillator();
   thump.type = "sine";
@@ -93,7 +93,7 @@ export function playDoorClose() {
   const gain = 0.11;
   const master = ctx.createGain();
   master.gain.value = 1;
-  master.connect(ctx.destination);
+  master.connect(busOut("sfx") || ctx.destination);
 
   const thump = ctx.createOscillator();
   thump.type = "sine";
@@ -150,7 +150,7 @@ export function playDoorDenied() {
   const gain = 0.028;
   const master = ctx.createGain();
   master.gain.value = 1;
-  master.connect(ctx.destination);
+  master.connect(busOut("sfx") || ctx.destination);
 
   // Same pitch twice, hard on/off — simple system error, not a musical thud
   const beeps = [0, 0.11];
@@ -185,7 +185,7 @@ export function playDoorAuth() {
   const gain = 0.018;
   const master = ctx.createGain();
   master.gain.value = 1;
-  master.connect(ctx.destination);
+  master.connect(busOut("sfx") || ctx.destination);
 
   // Two stepped square beeps — badge / lockpad OK (hard edges, no sine drip)
   const steps = [
@@ -226,7 +226,7 @@ export function playCyberSuccess() {
   const t0 = ctx.currentTime;
   const master = ctx.createGain();
   master.gain.value = 1;
-  master.connect(ctx.destination);
+  master.connect(busOut("sfx") || ctx.destination);
 
   // Soft low bloom
   const bloom = ctx.createOscillator();
@@ -319,7 +319,7 @@ export function playPodToggle(kind) {
   const opening = kind !== "close";
   const master = ctx.createGain();
   master.gain.value = 1;
-  master.connect(ctx.destination);
+  master.connect(busOut("sfx") || ctx.destination);
 
   const servo = ctx.createOscillator();
   servo.type = "sawtooth";

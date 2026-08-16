@@ -1,9 +1,9 @@
 import * as THREE from "three";
-import { shipVoice } from "./ai-voice.js?v=20260815ez";
-import { pickNpcChitchatLine } from "./npc-chitchat.js?v=20260815ds";
-import { playThinkDot, playNpcBonk, playNpcGearFrenzy } from "../sfx/npc-fun.js?v=20260815ez";
-import { playBriefStart } from "../sfx/brief.js";
-import { isDoorUnlocked as isDoorAlreadyUnlocked, markDoorUnlocked, DOOR_UNLOCK_COST, MONITOR_DEBUG_COST, TOILET_PRINT_COST, isMonitorDebugged, isNpcActivated, markNpcActivated, getPrintedToiletCount, addPrintedToilet } from "./datapoints.js?v=20260815ei";
+import { shipVoice } from "./ai-voice.js?v=20260816w";
+import { pickNpcChitchatLine } from "./npc-chitchat.js?v=20260817aj";
+import { playThinkDot, playNpcBonk, playNpcGearFrenzy } from "../sfx/npc-fun.js?v=20260816u";
+import { playBriefStart } from "../sfx/brief.js?v=20260816u";
+import { isDoorUnlocked as isDoorAlreadyUnlocked, markDoorUnlocked, DOOR_UNLOCK_COST, MONITOR_DEBUG_COST, TOILET_PRINT_COST, ENGINE_ROD_COST, ENGINE_ROD_CENTER_COST, isMonitorDebugged, isEngineRodRepaired, markEngineRodRepaired, isNpcActivated, markNpcActivated, getPrintedToiletCount, addPrintedToilet, getGrownTreeCount, addGrownTree, getNpcJob, setNpcJob, getNpcJobs, GARDEN_MAX_GARDENERS, engineRodCost, toiletPrintCost, treeGrowCost, activeCrewWorkCount, getActivatedNpcIds, npcActivateQuota, PRINTED_TOILET_MAX } from "./datapoints.js?v=20260817am";
 
 const WALL = 0xf7f8fa;
 const FLOOR = 0xcfd5de;
@@ -1127,6 +1127,52 @@ function makeEntranceFrame(room, frameKeys, {
   return frame;
 }
 
+function doorIconKey(label) {
+  const L = String(label || "").toLowerCase();
+  if (L.includes("garden")) return "garden";
+  if (L.includes("diner") || L.includes("kitchen")) return "diner";
+  if (L.includes("crew quarters") || L.includes("dorm")) return "dorm";
+  if (L.includes("washroom") || L.includes("hygiene")) return "washroom";
+  if (L.includes("engine room")) return "engine";
+  if (L.includes("cockpit") || L.includes("control room")) return "cockpit";
+  return "";
+}
+
+const _doorIconTex = Object.create(null);
+function doorIconTexture(key) {
+  if (_doorIconTex[key]) return _doorIconTex[key];
+  const loader = new THREE.TextureLoader();
+  const tex = loader.load("img/door-" + key + ".webp?v=20260817al");
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 2;
+  tex.generateMipmaps = true;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.premultiplyAlpha = true;
+  _doorIconTex[key] = tex;
+  return tex;
+}
+
+function makeDoorRoomIcon(key, panelW, panelH, holeY, flipOut) {
+  const mat = new THREE.MeshBasicMaterial({
+    map: doorIconTexture(key),
+    color: 0x9ef6ff,
+    transparent: true,
+    depthWrite: false,
+    toneMapped: false,
+    side: THREE.DoubleSide,
+    opacity: 0.92,
+    blending: THREE.AdditiveBlending,
+  });
+  const size = Math.min(panelW * 0.78, (panelH || panelW) * 0.72, Math.min(0.52, panelW * 0.34) * 4.5) * 0.46;
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(size, size), mat);
+  mesh.position.set(0, holeY + (panelH || panelW) * 0.12, flipOut ? -0.028 : 0.028);
+  mesh.rotation.y = flipOut ? Math.PI : 0;
+  mesh.renderOrder = 5;
+  mesh.userData.doorRoomIcon = true;
+  return mesh;
+}
+
 function makeGlassDoor(room, doorsOut, doorKeys, {
   ox, oz, localX, localZ, gw, h, axis, colliders = null, locked = false, side = "",
   roomLabel = "",
@@ -1217,19 +1263,39 @@ function makeGlassDoor(room, doorsOut, doorKeys, {
     }
   }
 
+  const flipOut = side === "w" || side === "s";
+
   let unlockHolo = null;
+  let unlockHit = null;
   if (locked) {
     unlockHolo = makeDoorUnlockHolo();
     const homeY = holeY - 0.2;
     // Face the OUTSIDE of the locked room (where the captain approaches).
     // West/south doors need the flipped local side; east/north keep the default.
-    const flipOut = side === "w" || side === "s";
     unlockHolo.position.set(0, homeY, flipOut ? -0.14 : 0.14);
     unlockHolo.rotation.y = flipOut ? Math.PI : 0;
     unlockHolo.userData.homeY = homeY;
     unlockHolo.userData.doorKey = key;
     unlockHolo.visible = effectivelyLocked;
     slide.add(unlockHolo);
+    const hitMat = new THREE.MeshBasicMaterial({
+      colorWrite: false,
+      depthWrite: false,
+      depthTest: false,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+    });
+    unlockHit = new THREE.Mesh(new THREE.PlaneGeometry(panelW, panelH), hitMat);
+    unlockHit.position.set(0, holeY, flipOut ? -0.06 : 0.06);
+    unlockHit.rotation.y = flipOut ? Math.PI : 0;
+    unlockHit.frustumCulled = false;
+    unlockHit.renderOrder = 3;
+    unlockHit.userData.unlockHit = true;
+    unlockHit.userData.doorKey = key;
+    unlockHit.visible = effectivelyLocked;
+    slide.add(unlockHit);
+    panel.userData.doorKey = key;
+    panel.userData.unlockHit = true;
   }
 
   let denyHolo = null;
@@ -1239,6 +1305,14 @@ function makeGlassDoor(room, doorsOut, doorKeys, {
     denyHolo.position.set(0, holeY - 0.42, 0.12);
     denyHolo.visible = false;
     slide.add(denyHolo);
+  }
+
+  let roomIcon = null;
+  const iconKey = doorIconKey(roomLabel);
+  if (iconKey) {
+    roomIcon = makeDoorRoomIcon(iconKey, panelW, panelH, holeY, flipOut);
+    roomIcon.visible = !effectivelyLocked;
+    slide.add(roomIcon);
   }
 
   doorsOut.push({
@@ -1259,7 +1333,9 @@ function makeGlassDoor(room, doorsOut, doorKeys, {
     savedBlockCollider: blockCollider,
     colliders,
     unlockHolo,
+    unlockHit,
     denyHolo,
+    roomIcon,
     roomLabel: String(roomLabel || room?.userData?.label || ""),
   });
 }
@@ -2093,6 +2169,9 @@ export function updateSosLights(rooms, t, hubNeon = null, hubStillSos = false) {
 function enableSos(room, anim) {
   applySosLighting(room);
   if (anim?.sosRooms) anim.sosRooms.push(room);
+  for (const wm of anim?.wallMonitors || []) {
+    if (wm.room === room) applyWallMonitorVisual(wm);
+  }
 }
 
 function queueLinkedSosRestore(anim, rooms, except) {
@@ -2113,7 +2192,7 @@ export function pumpPendingSosRestore(anim) {
   if (!q?.length) return;
   const room = q.shift();
   if (room?.userData?.lightMode === "sos") {
-    clearSosLighting(room, null);
+    clearSosLighting(room, anim);
   }
   syncShipSosActive(anim);
 }
@@ -2223,7 +2302,12 @@ export function clearSosLighting(room, anim = null) {
     queueLinkedSosRestore(anim, anim.cockpitLinkedSosRooms, room);
   }
 
-  if (anim) syncShipSosActive(anim);
+  if (anim) {
+    syncShipSosActive(anim);
+    for (const wm of anim.wallMonitors || []) {
+      if (wm.room === room) applyWallMonitorVisual(wm);
+    }
+  }
 }
 
 /** True while any SOS room is still in emergency lighting. */
@@ -2240,13 +2324,15 @@ export function syncShipSosActive(anim) {
   return any;
 }
 
-/** Orange while room is SOS + undebugged; calm blue/cyan once debugged. */
+/** Orange SOS until the room is restored; then the staff-manual webp CRT stays on. */
 export function applyWallMonitorVisual(wm) {
   if (!wm || wm.repairing) return;
   const roomSos = wm.room?.userData?.lightMode === "sos";
   const sos = roomSos && !wm.debugged;
   setWallMonitorSosBlend(wm, sos ? 0 : 1);
   syncDebugHoloVisibility(wm);
+  if (roomSos) hideRoomBriefing(wm);
+  else showRoomBriefOnMonitor(wm);
 }
 
 /** u=0 orange SOS · u=1 calm blue (used by repair bar tween). */
@@ -2261,11 +2347,13 @@ export function setWallMonitorSosBlend(wm, u) {
     const bl = (ab + (bb - ab) * t) | 0;
     return (r << 16) | (g << 8) | bl;
   };
-  if (wm.screenMat?.emissive) {
-    wm.screenMat.emissive.setHex(lerpC(0xcc5510, 0x1a90cc));
-    wm.screenMat.color.setHex(lerpC(0x2a1208, 0x0a2030));
-    if (wm.screenMat.emissiveIntensity != null) {
-      wm.screenMat.emissiveIntensity = 0.85 + (1 - t) * 0.1;
+  if (wm.screenMat) {
+    wm.screenMat.color.setHex(lerpC(0xcc5510, 0x1488c4));
+    if (wm.screenMat.emissive) {
+      wm.screenMat.emissive.setHex(lerpC(0xcc5510, 0x1a90cc));
+      if (wm.screenMat.emissiveIntensity != null) {
+        wm.screenMat.emissiveIntensity = 0.85 + (1 - t) * 0.1;
+      }
     }
   }
   for (const bm of wm.barMats || []) {
@@ -2298,7 +2386,7 @@ function roomDoorNeedles(label) {
   return L ? [L] : null;
 }
 
-function playerInRoomBounds(room, pos, pad = 0.55) {
+function playerInRoomBounds(room, pos, pad = 1.15) {
   const b = room?.userData?.bounds;
   if (!b || !pos) return false;
   return (
@@ -2351,7 +2439,14 @@ export function updateWallMonitorSosPulse(anim, t, playerPos = null, autoDoors =
       const speed = r.userData.spinSpeed ?? (0.35 + k * 0.4) * (k % 2 ? -1 : 1);
       r.rotation.z = t * speed;
     }
-    if (wm.debugged || wm.room?.userData?.lightMode !== "sos") continue;
+    if (wm.screenMat?.userData?.crtTime) wm.screenMat.userData.crtTime.value = t;
+    if (wm.debugged || wm.room?.userData?.lightMode !== "sos") {
+      const sm = wm.screenMat;
+      if (sm?.emissiveIntensity != null) {
+        sm.emissiveIntensity = 0.82 + Math.sin(t * 0.55 + i) * 0.08;
+      }
+      continue;
+    }
     const p = (Math.sin(t * 0.52 + i * 0.35) + 1) * 0.5;
     // 0 = blood red · 1 = orange-red (green capped so emissive doesn't bloom yellow)
     const g = 0.035 + p * 0.185;
@@ -2359,7 +2454,7 @@ export function updateWallMonitorSosPulse(anim, t, playerPos = null, autoDoors =
     const sm = wm.screenMat;
     if (sm) {
       if (sm.emissive) sm.emissive.setRGB(1, g, b);
-      sm.color.setRGB(0.24 + p * 0.1, 0.025 + p * 0.04, 0.02);
+      sm.color.setRGB(0.8 + p * 0.2, 0.18 + p * 0.12, 0.05);
       if (sm.emissiveIntensity != null) sm.emissiveIntensity = 0.72 + p * 0.16;
     }
     const barG = 0.05 + waveB * 0.18;
@@ -2391,7 +2486,7 @@ function syncDebugHoloVisibility(wm) {
     !wm.repairing &&
     wm.room?.userData?.lightMode === "sos";
   h.visible = !!show;
-  if (wm.hitPlane) wm.hitPlane.visible = !!show;
+  if (wm.hitPlane) wm.hitPlane.visible = !wm.repairing;
   if (!show && h.material) {
     if (h.userData.baseMap) h.material.map = h.userData.baseMap;
     h.material.color.setRGB(1, 1, 1);
@@ -2527,7 +2622,9 @@ export function resetAllRoomSos(anim) {
   }
   anim.sosActive = true;
   anim.pendingSosRestore = [];
+  resetEngineRods(anim);
   syncToiletPrintHolo(anim);
+  syncGrowTreeHolo(anim);
 }
 
 function monitorIdForRoom(room) {
@@ -2613,9 +2710,11 @@ export function debugWallMonitor(wm, anim) {
     clearSosLighting(room, anim);
     refreshAllWallMonitors(anim);
     syncToiletPrintHolo(anim);
+    syncGrowTreeHolo(anim);
     return { roomCleared: true, roomName };
   }
   syncToiletPrintHolo(anim);
+  syncGrowTreeHolo(anim);
   return { roomCleared: false, roomName };
 }
 
@@ -2625,12 +2724,29 @@ export function toiletSlotsLeft(anim) {
 
 function spawnToiletInSlot(slot) {
   if (!slot || slot.filled) return null;
-  const g = makeToilet(slot.group, slot.slotX, 0, slot.z, 0, { special: false });
+  const wrap = new THREE.Group();
+  wrap.position.set(slot.slotX, 0, slot.z);
+  slot.group.add(wrap);
+  const g = makeToilet(wrap, 0, 0, 0, 0, { special: false });
   g.userData.printedToilet = true;
-  slot.toilet = g;
+  wrap.userData.printedToilet = true;
+  slot.toilet = wrap;
+  slot.body = g;
   slot.filled = true;
   slot.printed = true;
-  return g;
+  return wrap;
+}
+
+export function updatePrintedToilets(_anim, _dt) {}
+
+function disposeToiletTeleportFx(anim) {
+  const list = anim?.treeGrowFx;
+  if (!list?.length) return;
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i].kind !== "toilet") continue;
+    disposeTreeTeleportFx(list[i]);
+    list.splice(i, 1);
+  }
 }
 
 export function printToiletInWashroom(anim) {
@@ -2638,15 +2754,18 @@ export function printToiletInWashroom(anim) {
   if (!slot) return false;
   spawnToiletInSlot(slot);
   addPrintedToilet();
+  createToiletTeleportFx(anim, slot);
   syncToiletPrintHolo(anim);
   return true;
 }
 
 export function resetPrintedToilets(anim) {
+  disposeToiletTeleportFx(anim);
   for (const slot of anim?.toiletSlots || []) {
     if (!slot.printed) continue;
     slot.toilet?.parent?.remove(slot.toilet);
     slot.toilet = null;
+    slot.body = null;
     slot.filled = false;
     slot.printed = false;
   }
@@ -2664,8 +2783,8 @@ function restorePrintedToilets(anim) {
   }
 }
 
-function makeToiletPrintHolo() {
-  const lines = ["3D print a toilet", TOILET_PRINT_COST + " data points · +2 crew capacity"];
+function toiletPrintHoloMaps(cost) {
+  const lines = ["3D print a toilet", cost + " data points · +2 active crew capacity"];
   const cyan = makeHoloLinesTexture(lines, {
     fill: "#66e0ff",
     shadow: "rgba(20, 120, 160, 0.9)",
@@ -2676,15 +2795,40 @@ function makeToiletPrintHolo() {
     shadow: "rgba(80, 200, 230, 0.95)",
     fontPx: 44,
   });
-  const aspect = Math.max(0.5, cyan.aspect || 1.8);
+  return { cyan, bright, aspect: Math.max(0.5, cyan.aspect || 1.8) };
+}
+
+function toiletPrintHoloSize(maps) {
   let planeH = 0.42;
-  let planeW = planeH * aspect;
+  let planeW = planeH * (maps.aspect || 1.8);
   if (planeW > 1.7) {
     planeW = 1.7;
-    planeH = planeW / aspect;
+    planeH = planeW / Math.max(0.5, maps.aspect || 1.8);
   }
+  return { planeH, planeW };
+}
+
+function applyToiletPrintHoloCost(holo, cost) {
+  if (!holo || holo.userData.cost === cost) return;
+  const maps = toiletPrintHoloMaps(cost);
+  holo.userData.cost = cost;
+  holo.userData.baseMap = maps.cyan.tex;
+  holo.userData.hoverMap = maps.bright.tex;
+  if (holo.material) {
+    holo.material.map = maps.cyan.tex;
+    holo.material.needsUpdate = true;
+  }
+  const { planeH, planeW } = toiletPrintHoloSize(maps);
+  if (holo.geometry) holo.geometry.dispose();
+  holo.geometry = new THREE.PlaneGeometry(planeW, planeH);
+}
+
+function makeToiletPrintHolo() {
+  const cost = toiletPrintCost();
+  const maps = toiletPrintHoloMaps(cost);
+  const { planeH, planeW } = toiletPrintHoloSize(maps);
   const mat = new THREE.MeshBasicMaterial({
-    map: cyan.tex,
+    map: maps.cyan.tex,
     transparent: true,
     opacity: 0.62,
     side: THREE.DoubleSide,
@@ -2698,8 +2842,9 @@ function makeToiletPrintHolo() {
   const plane = new THREE.Mesh(new THREE.PlaneGeometry(planeW, planeH), mat);
   plane.renderOrder = 3;
   plane.userData.toiletPrintHolo = true;
-  plane.userData.baseMap = cyan.tex;
-  plane.userData.hoverMap = bright.tex;
+  plane.userData.cost = cost;
+  plane.userData.baseMap = maps.cyan.tex;
+  plane.userData.hoverMap = maps.bright.tex;
   plane.userData.baseOpacity = 0.62;
   plane.userData.hoverOpacity = 0.98;
   return plane;
@@ -2709,7 +2854,482 @@ export function syncToiletPrintHolo(anim) {
   const p = anim?.toiletPrint;
   if (!p?.holo) return;
   const sos = p.wm?.room?.userData?.lightMode === "sos";
-  p.holo.visible = !sos && toiletSlotsLeft(anim) > 0 && !!p.wm?.debugged;
+  const restored = !sos && !!p.wm?.debugged;
+  const showPrint = restored && toiletSlotsLeft(anim) > 0;
+  p.holo.visible = showPrint;
+  if (p.hit) p.hit.visible = showPrint;
+  if (p.marquee) p.marquee.visible = restored;
+  if (showPrint) applyToiletPrintHoloCost(p.holo, toiletPrintCost());
+}
+
+const TOILET_MARQUEE_LINES = [
+  "Nothing is more important than hygiene.",
+  "To clean or not to clean is life or death.",
+  "Hygiene is life support you can see.",
+  "Wash your hands. Every time. No exceptions.",
+  "Dirty hands spread sickness. Clean hands keep the crew alive.",
+  "A dirty ship is a sick ship. A sick ship cannot fly.",
+  "If you skip the wash, you put the whole crew at risk.",
+  "Unwashed crew is grounded crew.",
+  "Germs do not wait. Wash now.",
+  "Stay clean or stay in the pod.",
+  "One dirty stall can sideline a whole shift.",
+  "Keep the stalls working. Keep the crew working.",
+  "More toilets mean more healthy crew we can wake.",
+  "Each extra toilet adds +2 active crew capacity.",
+  "Two extra crew capacity for every extra toilet.",
+  "The mission dies when the washroom fails.",
+  "Wash in. Work out.",
+  "Filth is the enemy. Soap is the weapon.",
+  "Report to the washroom. Leave the dirt there.",
+  "Soap is cheaper than a plague.",
+  "Clean body. Clean ship. Ready crew.",
+];
+
+function makeToiletMarquee() {
+  const text = TOILET_MARQUEE_LINES.join("    ·    ") + "    ·    ";
+  const c = document.createElement("canvas");
+  c.width = 1024;
+  c.height = 64;
+  const ctx = c.getContext("2d");
+  const fontFamily = '"Sora", "IBM Plex Sans", sans-serif';
+  ctx.font = `650 28px ${fontFamily}`;
+  const textWidth = Math.max(64, ctx.measureText(text).width);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  const mat = new THREE.MeshBasicMaterial({
+    map: tex,
+    transparent: true,
+    opacity: 0.82,
+    depthWrite: false,
+    toneMapped: false,
+    side: THREE.DoubleSide,
+  });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2.35, 0.16), mat);
+  mesh.renderOrder = 4;
+  mesh.userData.toiletMarquee = true;
+  mesh.userData.marquee = { canvas: c, ctx, tex, text, textWidth, fontFamily };
+  return mesh;
+}
+
+export function updateToiletMarquee(anim, t) {
+  const mesh = anim?.toiletPrint?.marquee;
+  if (!mesh?.visible) return;
+  const u = mesh.userData.marquee;
+  if (!u?.ctx) return;
+  const ctx = u.ctx;
+  const w = u.canvas.width;
+  const h = u.canvas.height;
+  const gap = 120;
+  const loop = u.textWidth + gap;
+  const x = -(((Number(t) || 0) * 72) % loop);
+  ctx.clearRect(0, 0, w, h);
+  ctx.font = `650 28px ${u.fontFamily}`;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "#7ee8ff";
+  ctx.shadowColor = "rgba(40, 160, 200, 0.9)";
+  ctx.shadowBlur = 12;
+  ctx.fillText(u.text, x, h * 0.52);
+  ctx.fillText(u.text, x + loop, h * 0.52);
+  ctx.shadowBlur = 0;
+  u.tex.needsUpdate = true;
+}
+
+export function treeSlotsLeft(anim) {
+  return (anim?.treeSlots || []).filter((s) => !s.filled).length;
+}
+
+function spawnTreeInSlot(anim, slot) {
+  if (!slot || slot.filled || !anim?.gardenRoom) return null;
+  const garden = anim.gardenRoom;
+  const g = makePlant(
+    garden,
+    slot.x,
+    0.1,
+    slot.z,
+    slot.scale,
+    slot.tone,
+    anim,
+    null,
+    garden.position.x,
+    garden.position.z
+  );
+  slot.plant = g;
+  slot.filled = true;
+  return g;
+}
+
+function holoAddMat(color, opacity = 0, map = null) {
+  return new THREE.MeshBasicMaterial({
+    color,
+    map,
+    transparent: true,
+    opacity,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+    toneMapped: false,
+  });
+}
+
+let _beamTipFadeTex = null;
+function beamTipFadeTexture() {
+  if (_beamTipFadeTex) return _beamTipFadeTex;
+  const c = document.createElement("canvas");
+  c.width = 4;
+  c.height = 128;
+  const ctx = c.getContext("2d");
+  const grad = ctx.createLinearGradient(0, c.height, 0, 0);
+  grad.addColorStop(0, "rgba(255,255,255,1)");
+  grad.addColorStop(0.52, "rgba(255,255,255,1)");
+  grad.addColorStop(0.78, "rgba(255,255,255,0.28)");
+  grad.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, c.width, c.height);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  _beamTipFadeTex = tex;
+  return tex;
+}
+
+function spawnTeleportGrowFx(anim, parent, object, x, z, targetScale, kind) {
+  if (!anim || !parent || !object) return null;
+  const scale = targetScale || 1;
+  object.scale.setScalar(0.001);
+
+  const g = new THREE.Group();
+  g.position.set(x, 0.08, z);
+  parent.add(g);
+
+  const fade = beamTipFadeTexture();
+  const col = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.2, 0.32, 3.35, 18, 1, true),
+    holoAddMat(0x9dffc4, 0, fade)
+  );
+  col.position.y = 1.7;
+  g.add(col);
+
+  const core = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.045, 0.07, 3.5, 10, 1, true),
+    holoAddMat(0xe8ffe8, 0, fade)
+  );
+  core.position.y = 1.75;
+  g.add(core);
+
+  const disc = new THREE.Mesh(
+    new THREE.RingGeometry(0.12, 0.62, 28),
+    holoAddMat(0xb8ffd4)
+  );
+  disc.rotation.x = -Math.PI / 2;
+  disc.position.y = 0.02;
+  g.add(disc);
+
+  const ringA = new THREE.Mesh(
+    new THREE.TorusGeometry(0.36, 0.016, 8, 28),
+    holoAddMat(0xd4ffe8)
+  );
+  g.add(ringA);
+  const ringB = new THREE.Mesh(
+    new THREE.TorusGeometry(0.28, 0.012, 8, 24),
+    holoAddMat(0x7dff9a)
+  );
+  g.add(ringB);
+
+  const motes = [];
+  for (let i = 0; i < 5; i++) {
+    const m = new THREE.Mesh(
+      new THREE.SphereGeometry(0.032, 8, 8),
+      holoAddMat(0xf2fff6)
+    );
+    m.userData.phase = i * 1.25;
+    g.add(m);
+    motes.push(m);
+  }
+
+  const fx = {
+    group: g,
+    col,
+    core,
+    disc,
+    ringA,
+    ringB,
+    motes,
+    plant: object,
+    targetScale: scale,
+    kind,
+    t: 0,
+    dur: 5,
+    onDone: null,
+  };
+  if (!anim.treeGrowFx) anim.treeGrowFx = [];
+  anim.treeGrowFx.push(fx);
+  return fx;
+}
+
+export function createTreeTeleportFx(anim, slot) {
+  return spawnTeleportGrowFx(
+    anim,
+    anim?.gardenRoom,
+    slot?.plant,
+    slot?.x,
+    slot?.z,
+    slot?.scale || 1,
+    "tree",
+  );
+}
+
+export function createToiletTeleportFx(anim, slot) {
+  return spawnTeleportGrowFx(
+    anim,
+    slot?.group,
+    slot?.toilet,
+    slot?.slotX,
+    slot?.z,
+    1,
+    "toilet",
+  );
+}
+
+function disposeTreeTeleportFx(fx) {
+  if (!fx) return;
+  if (fx.plant && fx.targetScale) {
+    fx.plant.scale.setScalar(fx.targetScale);
+  }
+  try {
+    fx.group?.parent?.remove(fx.group);
+  } catch (_) {}
+  fx.group?.traverse((o) => {
+    if (o.geometry) o.geometry.dispose?.();
+    if (o.material) o.material.dispose?.();
+  });
+}
+
+function stepTreeTeleportFx(fx, dt) {
+  fx.t += dt;
+  const u = Math.min(1, fx.t / fx.dur);
+  let beam = 0;
+  if (u < 0.1) beam = u / 0.1;
+  else if (u < 0.7) beam = 1;
+  else beam = Math.max(0, 1 - (u - 0.7) / 0.3);
+  const pulse = 0.72 + Math.sin(fx.t * 11) * 0.28;
+
+  if (fx.col?.material) fx.col.material.opacity = 0.2 * beam * pulse;
+  if (fx.core?.material) fx.core.material.opacity = 0.55 * beam;
+  if (fx.disc?.material) {
+    fx.disc.material.opacity = 0.35 * beam * pulse;
+    const ds = 0.75 + beam * 0.55 + Math.sin(fx.t * 7) * 0.08;
+    fx.disc.scale.set(ds, ds, 1);
+  }
+  if (fx.ringA) {
+    fx.ringA.rotation.y = fx.t * 2.4;
+    fx.ringA.position.y = 0.35 + (Math.sin(fx.t * 2.1) * 0.5 + 0.5) * 2.35;
+    if (fx.ringA.material) fx.ringA.material.opacity = 0.55 * beam;
+  }
+  if (fx.ringB) {
+    fx.ringB.rotation.y = -fx.t * 3.1;
+    fx.ringB.position.y = 2.55 - (Math.sin(fx.t * 2.1 + 1.2) * 0.5 + 0.5) * 2.2;
+    if (fx.ringB.material) fx.ringB.material.opacity = 0.45 * beam;
+  }
+  for (const m of fx.motes || []) {
+    const cycle = (fx.t * 0.52 + m.userData.phase) % 1;
+    const ang = m.userData.phase * 1.7;
+    m.position.set(Math.cos(ang) * 0.24, 0.12 + cycle * 2.9, Math.sin(ang) * 0.24);
+    if (m.material) m.material.opacity = beam * (1 - cycle) * 0.75;
+  }
+
+  const growU = Math.max(0, Math.min(1, (u - 0.38) / 0.52));
+  const ease = 1 - (1 - growU) ** 3;
+  if (fx.plant) {
+    fx.plant.scale.setScalar(0.001 + (fx.targetScale - 0.001) * ease);
+  }
+
+  if (u >= 1) {
+    const done = fx.onDone;
+    disposeTreeTeleportFx(fx);
+    try {
+      done?.();
+    } catch (_) {}
+    return false;
+  }
+  return true;
+}
+
+export function updateTreeGrowFx(anim, dt) {
+  const list = anim?.treeGrowFx;
+  if (!list?.length) return;
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (!stepTreeTeleportFx(list[i], dt)) list.splice(i, 1);
+  }
+}
+
+export function clearTreeGrowFx(anim) {
+  for (const fx of anim?.treeGrowFx || []) disposeTreeTeleportFx(fx);
+  if (anim) anim.treeGrowFx = [];
+}
+
+export function growDataTree(anim) {
+  const slot = (anim?.treeSlots || []).find((s) => !s.filled);
+  if (!slot) return null;
+  if (!spawnTreeInSlot(anim, slot)) return null;
+  addGrownTree();
+  syncGrowTreeHolo(anim);
+  return slot;
+}
+
+export function resetGrownTrees(anim) {
+  clearTreeGrowFx(anim);
+  for (const slot of anim?.treeSlots || []) {
+    if (slot.plant) {
+      try {
+        slot.plant.parent?.remove(slot.plant);
+      } catch (_) {}
+    }
+    slot.plant = null;
+    slot.filled = false;
+  }
+  if (anim) {
+    anim.plants = [];
+    anim.activePlant = null;
+  }
+  syncGrowTreeHolo(anim);
+}
+
+function restoreGrownTrees(anim) {
+  const n = Math.min(getGrownTreeCount(), (anim?.treeSlots || []).length);
+  let made = 0;
+  for (const slot of anim?.treeSlots || []) {
+    if (made >= n) break;
+    if (slot.filled) continue;
+    spawnTreeInSlot(anim, slot);
+    made += 1;
+  }
+  syncGrowTreeHolo(anim);
+}
+
+function makeWateringPot() {
+  const g = new THREE.Group();
+  const bodyMat = mat(0x3f8f58, {
+    metalness: 0.28,
+    roughness: 0.42,
+    emissive: 0x163820,
+    emissiveIntensity: 0.18,
+  });
+  const metalMat = mat(0xb8c4ce, { metalness: 0.78, roughness: 0.22 });
+  const darkMat = mat(0x6a7884, { metalness: 0.65, roughness: 0.3 });
+
+  const body = cyl(0.095, 0.118, 0.2, bodyMat, 0, 0.1, 0, 18);
+  g.add(body);
+  g.add(cyl(0.122, 0.122, 0.028, metalMat, 0, 0.212, 0, 18));
+  g.add(cyl(0.07, 0.07, 0.018, darkMat, 0, 0.228, 0, 14));
+
+  const spout = cyl(0.016, 0.024, 0.17, metalMat, 0.145, 0.125, 0, 10);
+  spout.rotation.z = -0.72;
+  g.add(spout);
+
+  const handle = new THREE.Mesh(
+    new THREE.TorusGeometry(0.068, 0.012, 8, 18, Math.PI),
+    metalMat
+  );
+  handle.rotation.z = Math.PI / 2;
+  handle.position.set(-0.118, 0.11, 0);
+  g.add(handle);
+
+  const lines = ["Grow a tree", treeGrowCost() + " data points"];
+  const base = makeHoloLinesTexture(lines, {
+    fill: "#7dff9a",
+    shadow: "rgba(20, 140, 60, 0.9)",
+    fontPx: 44,
+  });
+  const hover = makeHoloLinesTexture(lines, {
+    fill: "#e8ffe8",
+    shadow: "rgba(80, 220, 120, 0.95)",
+    fontPx: 44,
+  });
+  const aspect = Math.max(0.7, base.aspect || 1.5);
+  const labelH = 0.26;
+  const label = new THREE.Mesh(
+    new THREE.PlaneGeometry(Math.min(1.15, labelH * aspect), labelH),
+    new THREE.MeshBasicMaterial({
+      map: base.tex,
+      transparent: true,
+      opacity: 0.62,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      toneMapped: false,
+    })
+  );
+  label.position.set(0, 0.42, 0);
+  label.renderOrder = 3;
+  label.userData.growTreeHolo = true;
+  label.userData.baseMap = base.tex;
+  label.userData.hoverMap = hover.tex;
+  label.userData.baseOpacity = 0.62;
+  label.userData.hoverOpacity = 0.98;
+  label.userData.cost = treeGrowCost();
+  g.add(label);
+
+  const hit = new THREE.Mesh(
+    new THREE.BoxGeometry(0.48, 0.58, 0.4),
+    new THREE.MeshBasicMaterial({
+      colorWrite: false,
+      depthWrite: false,
+      depthTest: false,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+    })
+  );
+  hit.position.y = 0.28;
+  hit.userData.growTreeHit = true;
+  g.add(hit);
+
+  g.traverse((o) => {
+    if (o.isMesh) o.userData.growTreePick = true;
+  });
+  g.userData.bodyMat = bodyMat;
+  g.userData.label = label;
+  g.userData.hit = hit;
+  return g;
+}
+
+function applyGrowTreeHoloCost(label, cost) {
+  if (!label || label.userData.cost === cost) return;
+  const lines = ["Grow a tree", cost + " data points"];
+  const base = makeHoloLinesTexture(lines, {
+    fill: "#7dff9a",
+    shadow: "rgba(20, 140, 60, 0.9)",
+    fontPx: 44,
+  });
+  const hover = makeHoloLinesTexture(lines, {
+    fill: "#e8ffe8",
+    shadow: "rgba(80, 220, 120, 0.95)",
+    fontPx: 44,
+  });
+  label.userData.cost = cost;
+  label.userData.baseMap = base.tex;
+  label.userData.hoverMap = hover.tex;
+  if (label.material) {
+    label.material.map = base.tex;
+    label.material.needsUpdate = true;
+  }
+  const aspect = Math.max(0.7, base.aspect || 1.5);
+  const labelH = 0.28;
+  if (label.geometry) label.geometry.dispose();
+  label.geometry = new THREE.PlaneGeometry(Math.min(1.25, labelH * aspect), labelH);
+}
+
+export function syncGrowTreeHolo(anim) {
+  const p = anim?.growTree;
+  if (!p) return;
+  const show = treeSlotsLeft(anim) > 0 && !isWorkRoomSos("garden", anim);
+  if (p.pot) p.pot.visible = show;
+  if (p.holo) {
+    p.holo.visible = show;
+    if (show) applyGrowTreeHoloCost(p.holo, treeGrowCost());
+  }
+  if (p.hit) p.hit.visible = show;
 }
 
 function makeConsole(group, x, y, z, rotY = 0) {
@@ -3080,15 +3700,32 @@ function seatCrewAtChair(room, x, z, rotY = 0, scale = 0.44) {
   return av;
 }
 
-const WORK_SEATS = Object.create(null);
+const WORK_SEAT_POOLS = Object.create(null);
 
-function registerWorkSeat(npcId, room, localX, localZ, rotY, floorY = 0) {
-  WORK_SEATS[npcId] = {
+function registerWorkSeat(work, room, localX, localZ, rotY, floorY = 0) {
+  if (!WORK_SEAT_POOLS[work]) WORK_SEAT_POOLS[work] = [];
+  WORK_SEAT_POOLS[work].push({
     x: (room?.position?.x || 0) + localX,
     z: (room?.position?.z || 0) + localZ,
     y: floorY || 0,
     rotY: rotY || 0,
-  };
+  });
+}
+
+function workSeatFor(av, anim) {
+  const work = av?.userData?.npcWork;
+  const npcId = av?.userData?.npcId;
+  const pool = WORK_SEAT_POOLS[work];
+  if (!pool?.length) return null;
+  const ids = [];
+  for (const other of anim?.sleepingCrew || []) {
+    if ((other.userData?.npcWork || "") !== work) continue;
+    const id = other.userData?.npcId;
+    if (id) ids.push(id);
+  }
+  if (npcId && !ids.includes(npcId)) ids.push(npcId);
+  const idx = npcId ? Math.max(0, ids.indexOf(npcId)) : 0;
+  return pool[idx] || null;
 }
 
 function sitWorldPose(seat, scale) {
@@ -3178,11 +3815,86 @@ const CREW_ROSTER = [
   { id: "jun", name: "Jun Park", role: "botanist", duty: "I'll tend the hydroponic garden.", work: "garden" },
   { id: "tess", name: "Tess Orin", role: "chef", duty: "I'll get the diner running.", work: "diner" },
   { id: "kai", name: "Kai Holt", role: "reactor tech", duty: "I'll report to the engine room.", work: "engine" },
-  { id: "lila", name: "Lila Voss", role: "hygiene officer", duty: "I'll take the washroom watch.", work: "washroom" },
+  { id: "lila", name: "Lila Voss", role: "reactor tech", duty: "I'll report to the engine room.", work: "engine" },
   { id: "aden", name: "Aden Ruiz", role: "flight medic", duty: "I'll take a cockpit medical board.", work: "cockpit" },
   { id: "sable", name: "Sable Quinn", role: "systems officer", duty: "I'll run cockpit systems.", work: "cockpit" },
   { id: "pax", name: "Pax Reed", role: "navigator", duty: "I'll plot from the bridge.", work: "cockpit" },
+  { id: "wren", name: "Wren Hale", role: "gardener", duty: "I'll tend the hydroponic garden.", work: "garden" },
+  { id: "yara", name: "Yara Moss", role: "gardener", duty: "I'll tend the hydroponic garden.", work: "garden" },
 ];
+
+export const CREW_WORKS = [
+  { work: "garden", where: "Garden", role: "gardener", duty: "I'll tend the hydroponic garden.", max: GARDEN_MAX_GARDENERS },
+  { work: "diner", where: "Diner", role: "chef", duty: "I'll get the diner running.", max: 1 },
+  { work: "washroom", where: "Washroom", role: "hygiene officer", duty: "I'll take the washroom watch.", max: 2 },
+  { work: "engine", where: "Engine", role: "reactor tech", duty: "I'll report to the engine room.", max: 2 },
+  { work: "hub", where: "Hub", role: "archive keeper", duty: "I'll watch the Info Hub.", max: 1 },
+  { work: "cockpit", where: "Cockpit", role: "crew officer", duty: "I'll staff the bridge.", max: 5 },
+];
+
+function crewJobByWork(work) {
+  return CREW_WORKS.find((j) => j.work === work) || CREW_WORKS[CREW_WORKS.length - 1];
+}
+
+function rosterSpec(id) {
+  return CREW_ROSTER.find((s) => s.id === id) || null;
+}
+
+function applyJobFields(av, work) {
+  const spec = rosterSpec(av.userData.npcId);
+  const job = crewJobByWork(work);
+  av.userData.npcWork = work;
+  av.userData.npcRole = work === spec?.work ? spec.role : job.role;
+  av.userData.npcDuty = work === spec?.work ? spec.duty : job.duty;
+}
+
+export function countWorkAssigned(work, anim, exceptId = "") {
+  let n = 0;
+  for (const av of anim?.sleepingCrew || []) {
+    const id = av.userData?.npcId;
+    if (!id || id === exceptId) continue;
+    if (av.userData.state === "sleeping" && !isNpcActivated(id)) continue;
+    if ((av.userData.npcWork || getNpcJob(id) || "") === work) n += 1;
+  }
+  return n;
+}
+
+export function canAssignWork(work, anim, exceptId = "") {
+  const job = crewJobByWork(work);
+  return countWorkAssigned(work, anim, exceptId) < (job.max || 1);
+}
+
+export function pickWakeWork(av, anim, doors = null) {
+  const id = av?.userData?.npcId;
+  const saved = id ? getNpcJob(id) : "";
+  if (saved && workPostOpen(saved, anim, doors) && canAssignWork(saved, anim, id)) return saved;
+  const fill = ["cockpit", "hub", "garden", "diner", "engine", "washroom"];
+  for (const key of fill) {
+    if (!workPostOpen(key, anim, doors)) continue;
+    if (!canAssignWork(key, anim, id)) continue;
+    return key;
+  }
+  return "";
+}
+
+function workPostOpen(work, anim, doors) {
+  if (!work) return false;
+  if (isWorkRoomSos(work, anim)) return false;
+  if (doors && isNpcWorkRoomLocked(work, doors)) return false;
+  return true;
+}
+
+export function reassignNpcWork(av, work, root, anim = null) {
+  if (!av || !work) return false;
+  applyJobFields(av, work);
+  setNpcJob(av.userData.npcId, work);
+  applyNpcChestTag(av);
+  if (av.userData.state !== "sleeping") {
+    placeNpcAtWork(av, root, anim);
+  }
+  syncToiletPrintHolo(anim);
+  return true;
+}
 
 function resetNpcLimbLayout(av) {
   const scale = av.userData.sleepScale || 0.4;
@@ -3240,8 +3952,10 @@ function layCrewInBed(bed, spec, scale = 0.4) {
   av.userData.npcName = spec.name;
   av.userData.npcRole = spec.role;
   av.userData.npcDuty = spec.duty;
-  av.userData.npcWork = spec.work;
+  av.userData.npcWork = "";
   av.userData.sleepScale = scale;
+  const savedJob = getNpcJob(spec.id);
+  if (savedJob) applyJobFields(av, savedJob);
   applyNpcChestTag(av);
   ensureNpcThinkScreen(av);
   applyBedNamePlate(bed, spec.name);
@@ -3270,34 +3984,120 @@ function compactWalkPath(pts) {
   return out;
 }
 
-function workPathFor(work, aisle, npcId = "") {
-  // Doorway / corridor centers — stay in the walkable spine, not through walls
-  const dormLane = { x: aisle.x, z: -10.25 };
-  const dormDoor = { x: -10.15, z: -10.25 };
-  const deck = { x: 0, z: -10.25 };
-  const deckNorth = { x: 0, z: -8.05 };
-  const southCorrN = { x: 0, z: -1.05 };
-  const hub = { x: 0, z: 4.5 };
-  const hubNorth = { x: 0, z: 10.05 };
-  const cockDoor = { x: 0, z: 17.05 };
-  const gardenDoor = { x: -5.55, z: 4.5 };
-  const kitchenDoor = { x: 5.55, z: 4.5 };
-  const washDoor = { x: 10.05, z: -10.25 };
-  const engDoor = { x: 0, z: -12.55 };
-  const engineDoor = { x: 0, z: -19.55 };
-  const viaHub = [dormLane, dormDoor, deck, deckNorth, southCorrN, hub];
-  const routes = {
-    cockpit: [...viaHub, hubNorth, cockDoor],
-    hub: [...viaHub, { x: 2.6, z: 4.5 }],
-    garden: [...viaHub, gardenDoor, { x: -7.4, z: 4.5 }, { x: -11.5, z: 4.5 }],
-    kitchen: [...viaHub, kitchenDoor, { x: 7.4, z: 2.5 }],
-    diner: [...viaHub, kitchenDoor, { x: 7.4, z: 2.5 }],
-    engine: [dormLane, dormDoor, deck, engDoor, engineDoor, { x: 0, z: -21.0 }, { x: 6.55, z: -21.0 }, { x: 6.55, z: -25.1 }],
-    washroom: [dormLane, dormDoor, deck, washDoor, { x: 12.4, z: -10.25 }],
-    crewDeck: [dormLane, dormDoor, { x: -3.8, z: -10.25 }],
+/** Shared corridor spine — NPC wake walks and player Go-to use the same door points. */
+const SHIP_WALK_POS = {
+  cockpit: { x: 0, z: 19.85 },
+  cockDoor: { x: 0, z: 17.05 },
+  hubNorth: { x: 0, z: 10.05 },
+  hub: { x: 0, z: 6.7 },
+  hubCross: { x: 0, z: 4.5 },
+  gardenDoor: { x: -5.55, z: 4.5 },
+  garden: { x: -7.85, z: 4.5 },
+  dinerDoor: { x: 5.55, z: 4.5 },
+  diner: { x: 7.85, z: 4.5 },
+  southCorr: { x: 0, z: -1.05 },
+  deckNorth: { x: 0, z: -8.05 },
+  deck: { x: 0, z: -10.25 },
+  dormDoor: { x: -10.15, z: -10.25 },
+  dorm: { x: -12.2, z: -10.25 },
+  washDoor: { x: 10.05, z: -10.25 },
+  washroom: { x: 12.4, z: -10.25 },
+  engDoor: { x: 0, z: -12.55 },
+  engineDoor: { x: 0, z: -19.55 },
+  engine: { x: 0, z: -21.55 },
+};
+
+const SHIP_WALK_GRAPH = {
+  cockpit: ["cockDoor"],
+  cockDoor: ["cockpit", "hubNorth"],
+  hubNorth: ["cockDoor", "hub"],
+  hub: ["hubNorth", "hubCross"],
+  hubCross: ["hub", "gardenDoor", "dinerDoor", "southCorr"],
+  gardenDoor: ["hubCross", "garden"],
+  garden: ["gardenDoor"],
+  dinerDoor: ["hubCross", "diner"],
+  diner: ["dinerDoor"],
+  southCorr: ["hubCross", "deckNorth"],
+  deckNorth: ["southCorr", "deck"],
+  deck: ["deckNorth", "dormDoor", "washDoor", "engDoor"],
+  dormDoor: ["deck", "dorm"],
+  dorm: ["dormDoor"],
+  washDoor: ["deck", "washroom"],
+  washroom: ["washDoor"],
+  engDoor: ["deck", "engineDoor"],
+  engineDoor: ["engDoor", "engine"],
+  engine: ["engineDoor"],
+};
+
+function nearestWalkNode(x, z) {
+  let bestId = "hub";
+  let best = Infinity;
+  for (const [id, p] of Object.entries(SHIP_WALK_POS)) {
+    const d = Math.hypot(x - p.x, z - p.z);
+    if (d < best) {
+      best = d;
+      bestId = id;
+    }
+  }
+  return bestId;
+}
+
+function walkSpineTo(fromX, fromZ, goalId) {
+  const start = nearestWalkNode(fromX, fromZ);
+  const goal = SHIP_WALK_POS[goalId] ? goalId : "hub";
+  const prev = { [start]: null };
+  const q = [start];
+  for (let i = 0; i < q.length; i++) {
+    const cur = q[i];
+    if (cur === goal) break;
+    for (const n of SHIP_WALK_GRAPH[cur] || []) {
+      if (n in prev) continue;
+      prev[n] = cur;
+      q.push(n);
+    }
+  }
+  const ids = [];
+  if (goal in prev || goal === start) {
+    let c = goal;
+    while (c) {
+      ids.push(c);
+      c = prev[c];
+    }
+    ids.reverse();
+  } else if (SHIP_WALK_POS[goal]) {
+    ids.push(goal);
+  }
+  const pts = [{ x: fromX, z: fromZ }];
+  for (const id of ids) {
+    const p = SHIP_WALK_POS[id];
+    if (p) pts.push({ x: p.x, z: p.z });
+  }
+  return compactWalkPath(pts);
+}
+
+function workPathFor(work, aisle, av, anim) {
+  const goalByWork = {
+    cockpit: "cockpit",
+    hub: "hub",
+    garden: "garden",
+    kitchen: "diner",
+    diner: "diner",
+    engine: "engine",
+    washroom: "washroom",
+    crewDeck: "deck",
   };
-  const pts = [aisle, ...(routes[work] || routes.crewDeck)];
-  const seat = WORK_SEATS[npcId];
+  const pts = walkSpineTo(aisle.x, aisle.z, goalByWork[work] || "deck");
+  if (work === "garden") pts.push(gardenHomeFor(av, anim));
+  else if (work === "engine") {
+    pts.push({ x: 6.55, z: -21.0 }, { x: 6.55, z: -25.1 });
+  } else if (work === "hub") {
+    pts.push({ x: 2.6, z: 4.5 });
+  } else if (work === "kitchen" || work === "diner") {
+    pts.push({ x: 7.4, z: 2.5 });
+  } else if (work === "crewDeck") {
+    pts.push({ x: -3.8, z: -10.25 });
+  }
+  const seat = workSeatFor(av, anim);
   if (seat) {
     const rotY = seat.rotY || 0;
     const back = 0.92;
@@ -3376,8 +4176,13 @@ function lerpLimbsToStand(av, from, u) {
 }
 
 /** Wake a sleeper: tween from the bunk to the aisle, wave, talk, then walk to work. */
-export function beginNpcWake(av, root) {
+export function beginNpcWake(av, root, anim = null, doors = null) {
   if (!av || av.userData.state === "awake" || av.userData.state === "waking") return false;
+  const wakeWork = pickWakeWork(av, anim, doors);
+  if (!wakeWork) return false;
+  applyJobFields(av, wakeWork);
+  setNpcJob(av.userData.npcId, wakeWork);
+  applyNpcChestTag(av);
   const bed = av.userData.bed;
   if (bed?.userData?.podClosed) toggleBedPod(bed);
   if (av.userData.sleep) av.userData.sleep.hovering = false;
@@ -3401,7 +4206,7 @@ export function beginNpcWake(av, root) {
     standYaw: yaw,
     fromLimbs,
     t: 2.4,
-    path: workPathFor(av.userData.npcWork, aisle, av.userData.npcId),
+    path: workPathFor(av.userData.npcWork, aisle, av, anim),
     wp: 0,
     phaseWalk: Math.random() * Math.PI * 2,
     spoke: false,
@@ -3409,15 +4214,17 @@ export function beginNpcWake(av, root) {
   try {
     markNpcActivated(av.userData.npcId);
   } catch (_) {}
+  syncToiletPrintHolo(anim);
   return true;
 }
 
-function placeNpcAtWork(av, root) {
+function placeNpcAtWork(av, root, anim = null) {
   attachNpcToRoot(av, root);
+  if (av.userData.npcWork !== "washroom") clearNpcRoomba(av);
   const aisle = aisleWorldFromBed(av.userData.bed);
-  const path = workPathFor(av.userData.npcWork, aisle, av.userData.npcId);
+  const path = workPathFor(av.userData.npcWork, aisle, av, anim);
   const last = path[path.length - 1];
-  const seat = isDinerWork(av) ? null : WORK_SEATS[av.userData.npcId];
+  const seat = isDinerWork(av) ? null : workSeatFor(av, anim);
   av.userData.sleep = null;
   if (seat) {
     poseNpcSit(av, seat);
@@ -3435,18 +4242,12 @@ function placeNpcAtWork(av, root) {
       workTarget: { x: last.x, z: last.z },
       spoke: true,
     };
-    if (av.userData.npcWork === "garden") startGardenTend(null, av, av.userData.wake);
+    if (av.userData.npcWork === "garden") startGardenTend(anim, av, av.userData.wake);
     if (av.userData.npcWork === "washroom") startWashMop(av, av.userData.wake);
     if (isDinerWork(av)) startDinerJob(av, av.userData.wake, null);
   }
   const bed = av.userData.bed;
-  if (bed) {
-    bed.userData.podClosed = false;
-    if (bed.userData.pod) {
-      bed.userData.pod.visible = false;
-      bed.userData.pod.position.y = bed.userData.openY;
-    }
-  }
+  if (bed) snapBedPod(bed, false);
 }
 
 export function sleeperFromHit(obj, crew) {
@@ -3484,11 +4285,7 @@ export function resetSleepingCrew(anim, root) {
       hoverT: 0,
     };
     markSleeperMeshes(av);
-    bed.userData.podClosed = true;
-    if (bed.userData.pod) {
-      bed.userData.pod.visible = true;
-      bed.userData.pod.position.y = bed.userData.closedY;
-    }
+    snapBedPod(bed, true);
     if (av.userData.roomba) {
       av.userData.roomba.parent?.remove(av.userData.roomba);
       av.userData.roomba = null;
@@ -3532,10 +4329,8 @@ export function updateSleepingCrew(crew, t, playerPos = null, maxDist = 22, dt =
 const _wakeFwd = new THREE.Vector3();
 
 /** Pause at a sliding hatch until it is open enough to walk through. */
-function npcWaitForDoor(av, target, autoDoors) {
-  if (!av || !target || !autoDoors?.length) return false;
-  const ax = av.position.x;
-  const az = av.position.z;
+export function walkBlockedByDoor(ax, az, target, autoDoors) {
+  if (!target || !autoDoors?.length) return false;
   const tdx = target.x - ax;
   const tdz = target.z - az;
   const tlen = Math.hypot(tdx, tdz);
@@ -3552,6 +4347,11 @@ function npcWaitForDoor(av, target, autoDoors) {
     if ((d.open || 0) < 0.78) return true;
   }
   return false;
+}
+
+function npcWaitForDoor(av, target, autoDoors) {
+  if (!av) return false;
+  return walkBlockedByDoor(av.position.x, av.position.z, target, autoDoors);
 }
 
 function wrapPi(a) {
@@ -3657,14 +4457,62 @@ function gardenLaneZ(z) {
   return z < 4.55 ? 3.28 : 5.92;
 }
 
-function plantStandPoint(plant) {
+function stableSlot(id, n) {
+  const s = String(id || "");
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+  return Math.abs(h) % Math.max(1, n);
+}
+
+function gardenHomeFor(av, anim) {
+  const homes = [
+    { x: -13.35, z: 3.15 },
+    { x: -9.65, z: 3.15 },
+    { x: -11.5, z: 6.35 },
+  ];
+  const npcId = av?.userData?.npcId;
+  const ids = [];
+  for (const other of anim?.sleepingCrew || []) {
+    if (other.userData?.npcWork !== "garden") continue;
+    const id = other.userData?.npcId;
+    if (id) ids.push(id);
+  }
+  if (npcId && !ids.includes(npcId)) ids.push(npcId);
+  ids.sort();
+  const idx = ids.length > 1 && npcId
+    ? Math.max(0, ids.indexOf(npcId))
+    : stableSlot(npcId, homes.length);
+  return clampGardenSoil(homes[idx % homes.length]);
+}
+
+function plantStandPoint(plant, av) {
   const gx = plant?.wx ?? -11.5;
   const gz = plant?.wz ?? 4.5;
-  let oz = 0.84;
-  if (gz > 6.05) oz = -0.84;
-  else if (gz > 3.85 && gz < 5.65) oz = Math.random() < 0.5 ? -0.84 : 0.84;
-  const ox = gx < -11.5 ? 0.34 : -0.34;
+  const id = String(av?.userData?.npcId || "");
+  const flip = stableSlot(id, 2) === 0;
+  let oz = flip ? -0.9 : 0.9;
+  if (gz > 6.05) oz = -0.9;
+  else if (gz < 2.4) oz = 0.9;
+  const ox = gx < -11.5 ? 0.42 : -0.42;
   return clampGardenSoil({ x: gx + ox, z: gz + oz });
+}
+
+function pickNextGardenPlant(w, plants, anim, av) {
+  if (!plants?.length) return null;
+  const busy = new Set();
+  for (const other of anim?.sleepingCrew || []) {
+    if (other === av) continue;
+    if (other.userData?.npcWork !== "garden") continue;
+    const p = other.userData?.wake?.tendPlant;
+    if (p) busy.add(p);
+  }
+  const free = plants.filter((p) => !busy.has(p));
+  const pool = free.length ? free : plants;
+  let idx = ((w.gardenPlant ?? -1) + 1 + ((Math.random() * 2) | 0)) % pool.length;
+  if (pool.length > 1 && pool[idx] === plants[w.gardenPlant]) idx = (idx + 1) % pool.length;
+  const plant = pool[idx];
+  w.gardenPlant = plants.indexOf(plant);
+  return plant;
 }
 
 function queueGardenPath(w, from, stand) {
@@ -3684,24 +4532,17 @@ function queueGardenPath(w, from, stand) {
   w.gardenPi = 0;
 }
 
-function pickNextGardenPlant(w, plants) {
-  if (!plants?.length) return null;
-  let idx = ((w.gardenPlant ?? -1) + 1 + ((Math.random() * 3) | 0)) % plants.length;
-  if (plants.length > 1 && idx === w.gardenPlant) idx = (idx + 1) % plants.length;
-  w.gardenPlant = idx;
-  return plants[idx];
-}
-
 function startGardenTend(anim, av, w) {
-  const plant = pickNextGardenPlant(w, anim?.plants);
+  const plant = pickNextGardenPlant(w, anim?.plants, anim, av);
   w.tendPlant = plant || null;
   w.gardenHold = 0;
   if (!plant) {
-    w.gardenPts = [clampGardenSoil({ x: -11.5, z: 4.5 })];
+    const home = gardenHomeFor(av, anim);
+    w.gardenPts = [home];
     w.gardenPi = 0;
     return;
   }
-  queueGardenPath(w, { x: av.position.x, z: av.position.z }, plantStandPoint(plant));
+  queueGardenPath(w, { x: av.position.x, z: av.position.z }, plantStandPoint(plant, av));
 }
 
 function triggerPlantShake(anim, plant) {
@@ -3804,6 +4645,13 @@ function makeFloorRoomba() {
   return g;
 }
 
+function clearNpcRoomba(av) {
+  const bot = av?.userData?.roomba;
+  if (!bot) return;
+  bot.parent?.remove(bot);
+  av.userData.roomba = null;
+}
+
 function ensureNpcRoomba(av) {
   if (!av) return null;
   if (av.userData.mop) {
@@ -3849,7 +4697,12 @@ function washMopPoints() {
 function startWashMop(av, w) {
   ensureNpcRoomba(av);
   const pts = washMopPoints();
-  let idx = ((w.mopIdx ?? -1) + 1 + ((Math.random() * 2) | 0)) % pts.length;
+  const id = String(av?.userData?.npcId || "");
+  const seed = id.split("").reduce((s, c) => s + c.charCodeAt(0), 0);
+  const stride = seed % 2 === 0 ? 2 : 1;
+  let idx = w.mopIdx;
+  if (idx == null) idx = seed % pts.length;
+  else idx = (idx + stride) % pts.length;
   if (idx === w.mopIdx) idx = (idx + 1) % pts.length;
   w.mopIdx = idx;
   w.mopHold = 0;
@@ -3946,7 +4799,7 @@ function startDinerJob(av, w, anim, forced) {
   w.dinerPi = 0;
   const diner = anim?.diner;
   if (w.dinerJob === "sit") {
-    const seat = WORK_SEATS[av.userData.npcId] || diner?.seat;
+    const seat = workSeatFor(av, anim) || diner?.seat;
     if (!seat) {
       w.dinerJob = "patrol";
     } else {
@@ -4013,7 +4866,7 @@ function updateDinerJob(av, w, dt, t, i, anim, playerPos) {
   const target = w.dinerPts?.[w.dinerPi];
   if (!target) {
     if (w.dinerJob === "sit") {
-      const seat = WORK_SEATS[av.userData.npcId] || anim?.diner?.seat;
+      const seat = workSeatFor(av, anim) || anim?.diner?.seat;
       if (seat) {
         poseNpcSit(av, seat);
         av.userData.state = "awake";
@@ -4080,8 +4933,13 @@ function updateDinerMachines(anim, dt, playerPos = null) {
   const washer = anim?.diner?.washer;
   if (!washer?.userData) return;
   const run = !!washer.userData.running;
-  washer.userData.spin = (washer.userData.spin || 0) + (run ? dt * 9.2 : 0);
-  if (washer.userData.drum) washer.userData.drum.rotation.z = washer.userData.spin;
+  const baseY = washer.userData.baseY ?? 0;
+  if (run) {
+    washer.userData.bounceT = (washer.userData.bounceT || 0) + dt;
+    washer.position.y = baseY + (Math.sin(washer.userData.bounceT * 10.5) * 0.5 + 0.5) * 0.04;
+  } else if (washer.position.y !== baseY) {
+    washer.position.y = baseY;
+  }
 }
 
 function workRoomNeedles(work) {
@@ -4180,6 +5038,9 @@ export function updateAwakeCrew(crew, dt, t, autoDoors = null, playerPos = null,
       if (w.phase === "talk" && w.spoke && w.t <= 0) {
         w.phase = "walk";
         w.wp = 0;
+        w.ack = false;
+        w.ackNear = 0;
+        w.ackFar = 0;
         if (rightArm) rightArm.rotation.set(0, 0, 0);
         if (leftArm) leftArm.rotation.set(0, 0, 0);
         resetNpcLimbLayout(av);
@@ -4208,7 +5069,7 @@ export function updateAwakeCrew(crew, dt, t, autoDoors = null, playerPos = null,
           startDinerJob(av, w, anim);
           continue;
         }
-        const seat = WORK_SEATS[av.userData.npcId];
+        const seat = workSeatFor(av, anim);
         if (seat) {
           const pose = sitWorldPose(seat, scale);
           w.phase = "hop";
@@ -4232,10 +5093,9 @@ export function updateAwakeCrew(crew, dt, t, autoDoors = null, playerPos = null,
         w.wp += 1;
         continue;
       }
-      const seatY = WORK_SEATS[av.userData.npcId]?.y || 0;
+      const seatY = workSeatFor(av, anim)?.y || 0;
       const nearSeat = w.wp >= Math.max(0, w.path.length - 1);
       const standY = scale + (nearSeat ? seatY : 0);
-      if (updateWakeAcknowledge(av, w, playerPos, dt, t, standY)) continue;
       if (npcWaitForDoor(av, target, autoDoors)) {
         const face = Math.atan2(dx, dz);
         let dyaw = wrapPi(face - av.rotation.y);
@@ -4287,7 +5147,7 @@ export function updateAwakeCrew(crew, dt, t, autoDoors = null, playerPos = null,
       if (leftLeg) leftLeg.rotation.x = (-Math.PI / 2) * u;
       if (rightLeg) rightLeg.rotation.x = (-Math.PI / 2) * u;
       if (p >= 1) {
-        poseNpcSit(av, WORK_SEATS[av.userData.npcId]);
+        poseNpcSit(av, workSeatFor(av, anim));
         w.phase = "seated";
       }
       continue;
@@ -4303,6 +5163,7 @@ export function updateAwakeCrew(crew, dt, t, autoDoors = null, playerPos = null,
         updateWashMop(av, w, dt, t, i, playerPos);
         continue;
       }
+      clearNpcRoomba(av);
       if (isDinerWork(av)) {
         updateDinerJob(av, w, dt, t, i, anim, playerPos);
         continue;
@@ -4349,6 +5210,62 @@ export function updateAwakeCrew(crew, dt, t, autoDoors = null, playerPos = null,
           rightArm.rotation.z = -Math.sin(t * 1.05 + i) * 0.05;
         }
         av.position.y += (scale - av.position.y) * Math.min(1, 8 * dt);
+      }
+    }
+  }
+  separateWalkingCrew(crew);
+}
+
+const NPC_FOOT_SPACE = 0.95;
+
+function npcUsesFooting(av) {
+  const st = av?.userData?.state;
+  if (!st || st === "sleeping" || st === "sitting") return false;
+  const phase = av.userData.wake?.phase;
+  if (phase === "rise" || phase === "wave" || phase === "talk" || phase === "hop" || phase === "seated") {
+    return false;
+  }
+  if (av.userData.wake?.dinerSit) return false;
+  return true;
+}
+
+/** Soft push so walking / patrolling NPCs do not occupy the same spot. */
+function separateWalkingCrew(crew) {
+  if (!crew?.length) return;
+  for (let i = 0; i < crew.length; i++) {
+    const a = crew[i];
+    if (!npcUsesFooting(a)) continue;
+    for (let j = i + 1; j < crew.length; j++) {
+      const b = crew[j];
+      if (!npcUsesFooting(b)) continue;
+      const dx = a.position.x - b.position.x;
+      const dz = a.position.z - b.position.z;
+      const d = Math.hypot(dx, dz);
+      if (d >= NPC_FOOT_SPACE) continue;
+      const push = (NPC_FOOT_SPACE - d) * 0.5;
+      let nx;
+      let nz;
+      if (d < 1e-4) {
+        const ang = stableSlot(a.userData?.npcId, 8) * (Math.PI / 4);
+        nx = Math.cos(ang);
+        nz = Math.sin(ang);
+      } else {
+        nx = dx / d;
+        nz = dz / d;
+      }
+      a.position.x += nx * push;
+      a.position.z += nz * push;
+      b.position.x -= nx * push;
+      b.position.z -= nz * push;
+      if (a.userData.npcWork === "garden") {
+        const c = clampGardenSoil(a.position);
+        a.position.x = c.x;
+        a.position.z = c.z;
+      }
+      if (b.userData.npcWork === "garden") {
+        const c = clampGardenSoil(b.position);
+        b.position.x = c.x;
+        b.position.z = c.z;
       }
     }
   }
@@ -4546,7 +5463,7 @@ export function updateNpcChitchat(crew, dt, playerPos = null) {
     const cycle = Math.floor(chat.nearT / THINK_STEP) % 3;
     setNpcThinkFrame(av, cycle === 0 ? 3 : cycle === 1 ? 2 : 1, true);
     if (chat.nearT < chat.wait) continue;
-    const line = pickNpcChitchatLine(av.userData.npcId, chat.recent);
+    const line = pickNpcChitchatLine(av.userData.npcWork, chat.recent);
     if (!line) {
       chat.nearT = 0;
       chat.wait = 1 + Math.random() * 9;
@@ -4582,7 +5499,7 @@ const POKE_SHAKE_DUR = 2.65;
 
 /** Metallic poke. Enough hits in a short window → full shaky + gear SFX. */
 export function pokeWaitingNpc(av) {
-  if (!av || av.userData.state === "sleeping") return false;
+  if (!av || av.userData.state === "sleeping" || npcIsCelebrating(av)) return false;
   const wig = av.userData.wiggle;
   if (wig?.crazy) return false;
   if (wig && wig.t < 0.07) return false;
@@ -5340,6 +6257,8 @@ function makeBed(group, x, y, z, rotY = 0, tones = {}, interactables = null, roo
   g.userData.openY = openY;
   g.userData.closedY = closedY;
   g.userData.podClosed = true;
+  g.userData.podBaseOpacity = 0.72;
+  g.userData.podFade = null;
   g.traverse((o) => {
     if (o.isMesh) o.userData.bedClick = true;
   });
@@ -5348,10 +6267,11 @@ function makeBed(group, x, y, z, rotY = 0, tones = {}, interactables = null, roo
 
 export function setBedPodHover(bed, hovered) {
   const m = bed?.userData?.podMat;
-  if (m) {
-    const on = !!hovered && !!bed.userData.podClosed;
+  if (m && !bed.userData.podFade && bed.userData.podClosed) {
+    const on = !!hovered;
+    const base = bed.userData.podBaseOpacity || 0.72;
     m.emissiveIntensity = on ? 0.62 : 0.08;
-    m.opacity = on ? 0.92 : 0.72;
+    m.opacity = on ? 0.92 : base;
     m.color.setHex(on ? 0xe8f4ff : 0xd8e2ec);
     m.needsUpdate = true;
   }
@@ -5359,6 +6279,16 @@ export function setBedPodHover(bed, hovered) {
   if (av?.userData?.sleep && av.userData.state === "sleeping") {
     av.userData.sleep.hovering = !!hovered;
   }
+}
+
+/** True while a just-woken NPC is still doing the aisle wave. */
+export function npcIsCelebrating(av) {
+  const phase = av?.userData?.wake?.phase;
+  return phase === "rise" || phase === "wave" || phase === "talk";
+}
+
+export function bedNpcBusy(bed) {
+  return npcIsCelebrating(bed?.userData?.sleeper);
 }
 
 /** Display name for a sleeper's workplace. */
@@ -5375,6 +6305,28 @@ export function npcWorkRoomName(work) {
       crewDeck: "Crew Deck",
     }[work] || "that room"
   );
+}
+
+/** True if this workplace is still in SOS (must debug the room first). */
+export function isWorkRoomSos(work, anim) {
+  const needles = {
+    garden: ["garden"],
+    diner: ["diner"],
+    kitchen: ["diner"],
+    washroom: ["wash"],
+    engine: ["engine"],
+    cockpit: ["cockpit"],
+    hub: ["hub"],
+    dorm: ["crew quarters"],
+    crew: ["crew quarters"],
+  }[work];
+  if (!needles) return false;
+  for (const r of anim?.sosRooms || []) {
+    const L = String(r.userData?.label || "").toLowerCase();
+    if (!needles.some((n) => L.includes(n))) continue;
+    if (r.userData?.lightMode === "sos") return true;
+  }
+  return false;
 }
 
 /** True if this crewmate's workplace door is still sealed. */
@@ -5395,14 +6347,34 @@ export function isNpcWorkRoomLocked(work, doors) {
   return false;
 }
 
+function snapBedPod(bed, closed) {
+  if (!bed?.userData?.pod) return;
+  bed.userData.podFade = null;
+  bed.userData.podClosed = !!closed;
+  const pod = bed.userData.pod;
+  const mat = bed.userData.podMat;
+  const base = bed.userData.podBaseOpacity || 0.72;
+  pod.visible = !!closed;
+  pod.position.y = bed.userData.closedY ?? -0.04;
+  if (mat) {
+    mat.opacity = closed ? base : 0;
+    mat.emissiveIntensity = 0.08;
+    mat.depthWrite = !!closed;
+    mat.needsUpdate = true;
+  }
+}
+
 export function toggleBedPod(bed) {
   if (!bed?.userData?.pod) return false;
   const closed = !!bed.userData.podClosed;
   const pod = bed.userData.pod;
+  const mat = bed.userData.podMat;
+  const base = bed.userData.podBaseOpacity || 0.72;
   if (closed) {
     bed.userData.podClosed = false;
-    pod.visible = false;
-    pod.position.y = bed.userData.openY;
+    pod.visible = true;
+    pod.position.y = bed.userData.closedY;
+    bed.userData.podFade = { t: 0, dur: 0.42, from: mat?.opacity ?? base, to: 0 };
     setBedPodHover(bed, false);
     return "open";
   }
@@ -5413,7 +6385,32 @@ export function toggleBedPod(bed) {
   bed.userData.podClosed = true;
   pod.visible = true;
   pod.position.y = bed.userData.closedY;
+  bed.userData.podFade = { t: 0, dur: 0.42, from: mat?.opacity ?? 0, to: base };
   return "close";
+}
+
+export function updateBedPods(anim, dt) {
+  for (const bed of anim?.beds || []) {
+    const fade = bed.userData?.podFade;
+    if (!fade) continue;
+    fade.t += dt;
+    const u = Math.min(1, fade.t / Math.max(0.05, fade.dur));
+    const e = u * u * (3 - 2 * u);
+    const mat = bed.userData.podMat;
+    const op = fade.from + (fade.to - fade.from) * e;
+    if (mat) {
+      mat.opacity = op;
+      mat.transparent = true;
+      mat.depthWrite = op > 0.58;
+      mat.needsUpdate = true;
+    }
+    if (bed.userData.pod) bed.userData.pod.visible = op > 0.02 || !!bed.userData.podClosed;
+    if (u >= 1) {
+      bed.userData.podFade = null;
+      if (mat) mat.opacity = fade.to;
+      if (!bed.userData.podClosed && bed.userData.pod) bed.userData.pod.visible = false;
+    }
+  }
 }
 
 export function bedFromHit(obj) {
@@ -5586,7 +6583,7 @@ function makeKitchenCupboards(group, x, y, z, rotY = 0, length = 3.2) {
   return g;
 }
 
-/** Freestanding 3×2 stove — burners grey off; E toggles orange on */
+/** Freestanding 3×2 stove — burners grey off; tap/click toggles orange on */
 function makeStove(group, x, y, z, rotY = 0, interactables = null, roomOx = 0, roomOz = 0) {
   const g = new THREE.Group();
   g.position.set(x, y, z);
@@ -5621,11 +6618,6 @@ function makeStove(group, x, y, z, rotY = 0, interactables = null, roomOx = 0, r
     kind: "stove",
     on: false,
     burnerMat,
-    position: new THREE.Vector3(roomOx + x, 1.0, roomOz + z),
-    radius: 2.4,
-    prompt() {
-      return this.on ? "Press E · Turn stove off" : "Press E · Turn stove on";
-    },
     toggle() {
       this.on = !this.on;
       if (this.on) {
@@ -5639,9 +6631,23 @@ function makeStove(group, x, y, z, rotY = 0, interactables = null, roomOx = 0, r
       }
     },
   };
+  const hit = new THREE.Mesh(
+    new THREE.BoxGeometry(1.5, 2.5, 0.95),
+    new THREE.MeshBasicMaterial({
+      colorWrite: false,
+      depthWrite: false,
+      depthTest: false,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+    })
+  );
+  hit.position.set(0, 1.28, -0.08);
+  hit.userData.kitchenMachine = "stove";
+  g.add(hit);
+  g.userData.hit = hit;
+  g.userData.kitchenMachine = "stove";
   g.userData.toggle = () => stoveAct.toggle();
   g.userData.stand = { x: roomOx + x, z: roomOz + z + 0.95, face: Math.PI };
-  if (interactables) interactables.push(stoveAct);
   return g;
 }
 
@@ -5696,13 +6702,47 @@ function makeWashingMachine(group, x, y, z, rotY = 0, roomOx = 0, roomOz = 0) {
   g.add(glass);
   g.add(box(0.65, 0.12, 0.05, mat(0xb8c0c8, { metalness: 0.4, roughness: 0.35 }), 0, 1.0, 0.35));
   g.add(cyl(0.035, 0.035, 0.03, chrome, 0.2, 1.0, 0.38, 10));
-  g.add(box(0.2, 0.04, 0.02, dark, -0.15, 1.0, 0.38));
+  const barMat = mat(0x2a3038, {
+    metalness: 0.35,
+    roughness: 0.4,
+    emissive: 0x000000,
+    emissiveIntensity: 0,
+  });
+  g.add(box(0.2, 0.04, 0.02, barMat, -0.15, 1.0, 0.38));
+  const hit = new THREE.Mesh(
+    new THREE.BoxGeometry(0.82, 1.2, 0.82),
+    new THREE.MeshBasicMaterial({
+      colorWrite: false,
+      depthWrite: false,
+      depthTest: false,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+    })
+  );
+  hit.position.y = 0.55;
+  hit.userData.kitchenMachine = "washer";
+  g.add(hit);
+  g.userData.hit = hit;
+  g.userData.kitchenMachine = "washer";
+  g.userData.barMat = barMat;
   g.userData.drum = glass;
-  g.userData.spin = 0;
+  g.userData.baseY = y;
   g.userData.running = false;
-  g.userData.setRun = (on) => {
+  const applyWasherRun = (on) => {
     g.userData.running = !!on;
+    if (g.userData.running) {
+      barMat.color.setHex(0x3ee07a);
+      barMat.emissive.setHex(0x22c45a);
+      barMat.emissiveIntensity = 0.85;
+    } else {
+      barMat.color.setHex(0x2a3038);
+      barMat.emissive.setHex(0x000000);
+      barMat.emissiveIntensity = 0;
+      g.position.y = g.userData.baseY;
+    }
   };
+  g.userData.setRun = applyWasherRun;
+  g.userData.toggle = () => applyWasherRun(!g.userData.running);
   g.userData.stand = { x: roomOx + x, z: roomOz + z + 0.95, face: Math.PI };
   return g;
 }
@@ -6034,11 +7074,11 @@ function makeShowerFixtures(group, x, y, z, rotY = 0) {
 }
 
 /**
- * Rising stall gate — default open (recessed in floor). Grey circle button inside
- * the slot raises the door from the ground to close.
+ * Rising stall gate — default open (recessed in floor). Auto-closes when the
+ * player is deep in the slot near the fixture; auto-opens near the doorway.
  */
 function makeRisingStallGate(g, colliders, interactables, roomOx, roomOz, bankCx, bankCz, bankRotY, {
-  slotX, doorZ, doorW, doorH, stallW, label,
+  slotX, doorZ, doorW, doorH, stallW, depth, fixtureZ = 0, label,
 }) {
   const doorMat = mat(0xc5ced8, {
     metalness: 0.35,
@@ -6128,6 +7168,8 @@ function makeRisingStallGate(g, colliders, interactables, roomOx, roomOz, bankCx
   const openY = -doorH * 0.5 - 0.08;
   const closedY = doorH * 0.5;
 
+  const originX = roomOx + bankCx;
+  const originZ = roomOz + bankCz;
   const state = {
     kind: "stallDoor",
     label,
@@ -6141,19 +7183,19 @@ function makeRisingStallGate(g, colliders, interactables, roomOx, roomOz, bankCx
     closedMin: cmin.clone(),
     closedMax: cmax.clone(),
     position: new THREE.Vector3(btnWpos.x, btnY, btnWpos.z),
-    radius: 0.62,
+    radius: 0,
     button: btn,
     btnOutX,
     btnInX,
-    prompt() {
-      return this.closed
-        ? `Press E · Open ${this.label}`
-        : `Press E · Close ${this.label}`;
-    },
-    toggle() {
-      this.closed = !this.closed;
-      this.target = this.closed ? 1 : 0;
-    },
+    slotX,
+    stallW,
+    depth,
+    doorZ,
+    fixtureZ,
+    originX,
+    originZ,
+    cos,
+    sin,
   };
   interactables.push(state);
   return state;
@@ -6249,12 +7291,14 @@ function makeStallBank(room, colliders, interactables, roomOx, roomOz, {
       doorW,
       doorH,
       stallW,
+      depth,
+      fixtureZ: kind === "toilet" ? -depth * 0.22 : 0,
       label: `${kind} ${i + 1}`,
     });
   }
 }
 
-export function updateStallDoors(interactables, dt) {
+export function updateStallDoors(interactables, dt, playerPos = null) {
   if (!interactables) return;
   const speed = 2.2;
   for (let i = 0; i < interactables.length; i++) {
@@ -6270,6 +7314,25 @@ export function updateStallDoors(interactables, dt) {
       continue;
     }
     if (d.kind !== "stallDoor") continue;
+    if (playerPos) {
+      const dx = playerPos.x - d.originX;
+      const dz = playerPos.z - d.originZ;
+      const lx = d.cos * dx + d.sin * dz;
+      const lz = -d.sin * dx + d.cos * dz;
+      const halfW = (d.stallW || 1.25) * 0.5 - 0.08;
+      const back = -(d.depth || 1.8) * 0.5 + 0.06;
+      const front = (d.doorZ || 0.9) + 0.16;
+      const inSlot = Math.abs(lx - d.slotX) < halfW && lz >= back && lz <= front;
+      const closeLine = ((d.fixtureZ || 0) + (d.doorZ || 0.9)) * 0.5;
+      if (!inSlot) {
+        d.target = 0;
+      } else if (d.target > 0.5) {
+        if (lz > closeLine + 0.16) d.target = 0;
+      } else if (lz < closeLine - 0.08 && lz < (d.doorZ || 0.9) - 0.42) {
+        d.target = 1;
+      }
+      d.closed = d.target > 0.5;
+    }
     d.amount += (d.target - d.amount) * Math.min(1, speed * dt);
     if (d.amount < 0.001) d.amount = 0;
     if (d.amount > 0.999) d.amount = 1;
@@ -6299,7 +7362,7 @@ export function nearestInteractable(interactables, pos) {
   if (!interactables) return null;
   for (let i = 0; i < interactables.length; i++) {
     const it = interactables[i];
-    if (typeof it.active === "function" && !it.active()) continue;
+    if (it.kind === "stallDoor") continue;
     const dx = pos.x - it.position.x;
     const dz = pos.z - it.position.z;
     const dist = Math.hypot(dx, dz);
@@ -6312,9 +7375,9 @@ export function nearestInteractable(interactables, pos) {
 }
 
 /** Wall monitor panels — same style as cockpit side screens */
-function decorateWallMonitors(room, anim, spots) {
+function decorateWallMonitors(room, anim, spots, screenOpts = {}) {
   for (const [x, y, z, rotY, w = 2.0, h = 1.4] of spots) {
-    makeBigScreen(room, anim, x, y, z, w, h, rotY);
+    makeBigScreen(room, anim, x, y, z, w, h, rotY, screenOpts);
   }
 }
 
@@ -6543,10 +7606,14 @@ export function unlockShipDoor(door, opts = {}) {
   if (door.unlockHolo && !opts.keepHoloVisible) {
     door.unlockHolo.visible = false;
   }
+  if (door.unlockHit && !opts.keepHoloVisible) {
+    door.unlockHit.visible = false;
+  }
   for (const p of door.nameLabels || []) {
     p.userData.labelRevealed = true;
     p.visible = true;
   }
+  if (door.roomIcon) door.roomIcon.visible = true;
   try {
     markDoorUnlocked(door.key);
   } catch (_) {}
@@ -6575,10 +7642,12 @@ export function relockAllShipDoors(doors) {
         holo.material.needsUpdate = true;
       }
     }
+    if (door.unlockHit) door.unlockHit.visible = true;
     for (const p of door.nameLabels || []) {
       p.userData.labelRevealed = false;
       p.visible = false;
     }
+    if (door.roomIcon) door.roomIcon.visible = false;
   }
 }
 
@@ -6712,6 +7781,7 @@ const FACILITY_BOARD = [
   { name: "Info Hub", roomNeedles: ["hub"], alwaysOpen: true },
   { name: "Garden", roomNeedles: ["garden"], doorTag: "garden" },
   { name: "Diner", roomNeedles: ["diner", "kitchen"], doorTag: "diner" },
+  { name: "Dorm", roomNeedles: ["crew quarters", "dorm"], doorTag: "dorm" },
   { name: "Washroom", roomNeedles: ["washroom", "hygiene"], doorTag: "washroom" },
   { name: "Engine room", roomNeedles: ["engine room"], doorTag: "engine" },
 ];
@@ -6753,6 +7823,34 @@ export function getFacilityBoard(anim, autoDoors) {
   });
 }
 
+export function shipTodoProgress(anim, autoDoors) {
+  const doorTags = FACILITY_BOARD.filter((s) => s.doorTag).map((s) => s.doorTag);
+  let doorsDone = 0;
+  for (const tag of doorTags) {
+    if (facilityDoorOpen(autoDoors, tag)) doorsDone += 1;
+  }
+  // Cockpit hatch is not a datapoint door — debugging the room repairs it.
+  const cockpitDoorDone = facilityFullyDebugged(anim, ["cockpit"]);
+  if (cockpitDoorDone) doorsDone += 1;
+  let debugDone = 0;
+  for (const spec of FACILITY_BOARD) {
+    if (facilityFullyDebugged(anim, spec.roomNeedles)) debugDone += 1;
+  }
+  const rods = anim?.engineRods || [];
+  return {
+    doorsDone,
+    doorsMax: doorTags.length + 1,
+    debugDone,
+    debugMax: FACILITY_BOARD.length,
+    crewDone: getActivatedNpcIds().length,
+    crewMax: CREW_ROSTER.length,
+    enginesDone: rods.filter((r) => r.repaired).length,
+    enginesMax: rods.length || 5,
+    toiletsDone: getPrintedToiletCount(),
+    toiletsMax: PRINTED_TOILET_MAX,
+  };
+}
+
 export function getCrewBoard(anim) {
   const awake = new Set();
   for (const av of anim?.sleepingCrew || []) {
@@ -6760,11 +7858,18 @@ export function getCrewBoard(anim) {
       awake.add(av.userData.npcId);
     }
   }
-  return CREW_ROSTER.map((spec) => ({
-    name: String(spec.name || "").trim().split(/\s+/)[0] || spec.name,
-    role: spec.role,
-    active: isNpcActivated(spec.id) || awake.has(spec.id),
-  }));
+  return CREW_ROSTER.map((spec) => {
+    const av = (anim?.sleepingCrew || []).find((a) => a.userData?.npcId === spec.id);
+    const work = av?.userData?.npcWork || getNpcJob(spec.id) || "";
+    const role = work
+      ? (av?.userData?.npcRole || (work === spec.work ? spec.role : crewJobByWork(work).role))
+      : "asleep";
+    return {
+      name: String(spec.name || "").trim().split(/\s+/)[0] || spec.name,
+      role,
+      active: isNpcActivated(spec.id) || awake.has(spec.id),
+    };
+  });
 }
 
 function linkDoorOverLabels(anim, autoDoors) {
@@ -6958,6 +8063,28 @@ function makeLoungeCarpet(room, x, z, w, d) {
   return rug;
 }
 
+function hookWallMonitorCrt(mat) {
+  if (!mat || mat.userData.crtHooked) return;
+  mat.userData.crtHooked = true;
+  const uTime = { value: 0 };
+  mat.userData.crtTime = uTime;
+  mat.customProgramCacheKey = () => "luac-wall-crt-v3";
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uCrtTime = uTime;
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        "#include <common>",
+        `#include <common>
+         uniform float uCrtTime;`
+      )
+      .replace(
+        "#include <opaque_fragment>",
+        `#include <opaque_fragment>
+         gl_FragColor.rgb *= 0.97 + 0.03 * sin(gl_FragCoord.y * 0.028 + uCrtTime * 0.55);`
+      );
+  };
+}
+
 function makeBigScreen(group, anim, x, y, z, w, h, rotY = 0, opts = {}) {
   const g = new THREE.Group();
   g.position.set(x, y, z);
@@ -6965,10 +8092,15 @@ function makeBigScreen(group, anim, x, y, z, w, h, rotY = 0, opts = {}) {
   group.add(g);
 
   const radius = opts.radius ?? Math.min(0.35, w * 0.04, h * 0.08);
-  const bezelMat = mat(0xb0b8c4, { metalness: 0.45, roughness: 0.4 });
-  const screenMat = mat(0x0a2030, {
-    emissive: 0x1a90cc, emissiveIntensity: 0.9, roughness: 0.35, metalness: 0.1,
-  });
+  const bezelMat = opts.bezelGrey
+    ? mat(0xb0b8c4, { metalness: 0.45, roughness: 0.4 })
+    : mat(0xf7f8fa, { metalness: 0.22, roughness: 0.22 });
+  const wallCrt = !opts.interactive;
+  const screenMat = wallCrt
+    ? new THREE.MeshBasicMaterial({ color: 0x1488c4, toneMapped: false })
+    : mat(0x0a2030, {
+        emissive: 0x1a90cc, emissiveIntensity: 0.9, roughness: 0.35, metalness: 0.1,
+      });
 
   // Backing closer to the wall; proud rim around a recessed glass (garden ring vs soil)
   const rimW = 0.14;
@@ -6999,9 +8131,11 @@ function makeBigScreen(group, anim, x, y, z, w, h, rotY = 0, opts = {}) {
   // fake UI bars (flat on screen, kept inside panel)
   for (let i = 0; i < 5; i++) {
     const bw = Math.min(w * (0.12 + (i % 3) * 0.06), w * 0.28);
-    const barMat = mat(0x44ffcc, {
-      emissive: 0x44ffcc, emissiveIntensity: 0.85,
-    });
+    const barMat = wallCrt
+      ? new THREE.MeshBasicMaterial({ color: 0x44ffcc, toneMapped: false })
+      : mat(0x44ffcc, {
+          emissive: 0x44ffcc, emissiveIntensity: 0.85,
+        });
     barMats.push(barMat);
     const bar = box(bw, 0.05, 0.01, barMat, -w * 0.22 + (i % 3) * 0.22, h * 0.22 - Math.floor(i / 3) * 0.28, faceZ);
     barMeshes.push(bar);
@@ -7066,13 +8200,14 @@ function makeBigScreen(group, anim, x, y, z, w, h, rotY = 0, opts = {}) {
     g.userData.width = w;
     g.userData.height = h;
   } else {
-    // Wall monitors: orange in SOS until debugged → calm blue
+    // Wall monitors: orange SOS until debugged, then the staff-manual webp CRT
     // Tag so animateDeco doesn't pulse/recolor these (that looked glitchy)
     screen.userData.wallMonitor = true;
     deco.userData.wallMonitor = true;
     deco.traverse((o) => {
       o.userData.wallMonitor = true;
     });
+    hookWallMonitorCrt(screenMat);
     registerWallMonitor(anim, group, g, {
       screenMat,
       screen,
@@ -7085,6 +8220,118 @@ function makeBigScreen(group, anim, x, y, z, w, h, rotY = 0, opts = {}) {
   }
 
   return g;
+}
+
+function makeRosterTabletTex() {
+  const c = document.createElement("canvas");
+  const w = 320;
+  const h = 448;
+  c.width = w;
+  c.height = h;
+  const ctx = c.getContext("2d");
+  ctx.fillStyle = "#071018";
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = "#0c2433";
+  ctx.fillRect(0, 0, w, 54);
+  ctx.fillStyle = "#5ee0ff";
+  ctx.font = "bold 20px sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("CREW ASSIGNMENT", w * 0.5, 28);
+  const tones = ["#5ee0ff", "#7ec8ff", "#6eec9a", "#ffd060", "#c89aff", "#ff8aa0", "#5ee8e0", "#ffb078"];
+  for (let i = 0; i < 8; i++) {
+    const y = 72 + i * 42;
+    ctx.strokeStyle = "rgba(80, 200, 255, 0.42)";
+    ctx.lineWidth = 1.4;
+    ctx.strokeRect(22, y, w - 44, 34);
+    ctx.beginPath();
+    ctx.arc(44, y + 17, 8, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = tones[i];
+    ctx.fillRect(62, y + 13, 128 + (i % 3) * 22, 7);
+    ctx.strokeStyle = "rgba(90, 210, 255, 0.7)";
+    ctx.strokeRect(w - 72, y + 8, 34, 18);
+  }
+  ctx.fillStyle = "rgba(180, 220, 240, 0.38)";
+  ctx.fillRect(w * 0.5 - 28, h - 22, 56, 5);
+  ctx.strokeStyle = "rgba(90, 210, 255, 0.5)";
+  ctx.lineWidth = 2;
+  const tick = (x, y, dx, dy) => {
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + dx, y);
+    ctx.moveTo(x, y);
+    ctx.lineTo(x, y + dy);
+    ctx.stroke();
+  };
+  tick(8, 8, 14, 14);
+  tick(w - 8, 8, -14, 14);
+  tick(8, h - 8, 14, -14);
+  tick(w - 8, h - 8, -14, -14);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 2;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+/** Wall-mounted roster tablet on the diner north wall, left of the big screen. */
+function makeDinerRosterBoard(room, wallZ) {
+  const g = new THREE.Group();
+  const bodyW = 0.74;
+  const bodyH = 1.04;
+  const bodyD = 0.048;
+  const screenW = 0.62;
+  const screenH = 0.88;
+  const bodyMat = mat(0x1a1e24, { roughness: 0.36, metalness: 0.58 });
+  const body = extrudeRounded(bodyW, bodyH, bodyD, 0.058, bodyMat);
+  body.position.z = bodyD * 0.5;
+  const paperMat = makeBriefCrtMaterial(makeRosterTabletTex(), { sweep: true });
+  paperMat.transparent = false;
+  paperMat.depthWrite = true;
+  const paper = roundedPlane(screenW, screenH, 0.03, paperMat);
+  paper.position.z = bodyD + 0.007;
+  const cam = new THREE.Mesh(
+    new THREE.CircleGeometry(0.013, 18),
+    mat(0x050608, { roughness: 0.22, metalness: 0.72 })
+  );
+  cam.position.set(0, bodyH * 0.5 - 0.03, bodyD + 0.008);
+  const clipMat = mat(0xc8ff4a, {
+    roughness: 0.32,
+    metalness: 0.12,
+    emissive: 0xa8ff33,
+    emissiveIntensity: 0.55,
+  });
+  const clip = new THREE.Mesh(new THREE.CircleGeometry(0.009, 14), clipMat);
+  clip.position.set(0.09, bodyH * 0.5 - 0.03, bodyD + 0.009);
+  const hit = new THREE.Mesh(
+    new THREE.PlaneGeometry(bodyW + 0.08, bodyH + 0.08),
+    new THREE.MeshBasicMaterial({ visible: false, side: THREE.DoubleSide })
+  );
+  hit.position.z = bodyD + 0.02;
+  hit.userData.dinerRoster = true;
+  g.add(body, paper, cam, clip, hit);
+  const z = wallZ ?? ((room.userData?.dims?.d ?? 11) * 0.5 - 0.22 - 0.04);
+  g.position.set(-3.18, 1.82, z);
+  g.rotation.y = Math.PI;
+  room.add(g);
+  g.userData.hit = hit;
+  g.userData.paper = paper;
+  g.userData.paperMat = paperMat;
+  g.userData.clipMat = clipMat;
+  return g;
+}
+
+export function updateDinerRosterClip(anim, t) {
+  const clock = Number(t) || 0;
+  const screenU = anim?.diner?.rosterPaper?.material?.uniforms;
+  if (screenU?.uTime) screenU.uTime.value = clock;
+  const m = anim?.diner?.rosterClipMat;
+  if (!m?.color) return;
+  const u = 0.5 + 0.5 * Math.sin(clock * 1.15);
+  m.color.setRGB(0.08 + 0.70 * u, 0.08 + 0.92 * u, 0.08 + 0.16 * u);
+  if (m.emissive) m.emissive.setRGB(0.04 + 0.62 * u, 0.04 + 0.95 * u, 0.02 + 0.12 * u);
+  if (m.emissiveIntensity != null) m.emissiveIntensity = 0.12 + 0.7 * u;
 }
 
 /** try3js-looking space: stars drift toward us, fade out, respawn small in the distance */
@@ -7475,7 +8722,7 @@ export function createStatusView(aspect = 16 / 9) {
         ctx.fillStyle = row.state === "ok" ? "#5dff9a" : "#ff5a5a";
         ctx.fillText(row.name, leftX, y);
       }
-      y += 50;
+      y += 46;
     }
 
     let cy = padY + 48;
@@ -7678,7 +8925,7 @@ export function createStatusView(aspect = 16 / 9) {
   };
 }
 
-function makeEngineCore(group, anim, x, y, z, { scale = 1, light = true } = {}) {
+function makeEngineCore(group, anim, x, y, z, { scale = 1, light = true, haloGain = 2.2 } = {}) {
   const g = new THREE.Group();
   g.position.set(x, y, z);
   g.scale.setScalar(scale);
@@ -7687,30 +8934,35 @@ function makeEngineCore(group, anim, x, y, z, { scale = 1, light = true } = {}) 
   g.add(cyl(0.85, 1.0, 0.25, mat(0xe0e6ec, { metalness: 0.92, roughness: 0.12 }), 0, 0.18, 0, 24));
   g.add(cyl(0.7, 0.7, 2.0, mat(0xd4dce6, { metalness: 0.9, roughness: 0.14 }), 0, 1.25, 0, 24));
 
+  const coreMat = mat(GLOW_ORANGE, { emissive: GLOW_ORANGE, emissiveIntensity: 1.4, roughness: 0.25, metalness: 0.1 });
   const core = new THREE.Mesh(
     new THREE.SphereGeometry(0.42, 24, 16),
-    mat(GLOW_ORANGE, { emissive: GLOW_ORANGE, emissiveIntensity: 1.4, roughness: 0.25, metalness: 0.1 })
+    coreMat
   );
   core.position.y = 1.25;
+  core.userData.engineRod = true;
   g.add(core);
   anim.cores.push(core);
 
+  let halo = null;
   if (light) {
-    const halo = new THREE.PointLight(0xff6622, 2.2 * scale, 14 * scale, 1.5);
+    halo = new THREE.PointLight(0xff6622, haloGain * scale, 10 * scale, 1.5);
     halo.position.set(0, 1.25, 0);
+    halo.userData.engineRod = true;
     g.add(halo);
     anim.engineLights.push(halo);
   }
 
+  const barMat = mat(METAL, { metalness: 0.55, roughness: 0.32 });
   for (let i = 0; i < 4; i++) {
     const a = (i / 4) * Math.PI * 2;
-    g.add(box(0.12, 1.85, 0.12, mat(METAL), Math.cos(a) * 0.82, 1.15, Math.sin(a) * 0.82));
+    g.add(box(0.12, 1.85, 0.12, barMat, Math.cos(a) * 0.82, 1.15, Math.sin(a) * 0.82));
   }
-  return g;
+  return { group: g, core, coreMat, halo, barMat };
 }
 
-/** Thick simple orange riser from engine top into the ceiling */
-function makeEngineCeilingPipes(room, anim, x, z, ceilingY, scale = 1) {
+/** Thick simple orange riser from engine top into the ceiling (child of the scaled core group). */
+function makeEngineCeilingPipes(parent, ceilingY, scale = 1) {
   const pipeMat = mat(0xff7a18, {
     metalness: 0.08,
     roughness: 0.55,
@@ -7719,12 +8971,284 @@ function makeEngineCeilingPipes(room, anim, x, z, ceilingY, scale = 1) {
   });
   const topY = ceilingY - 0.02;
   const baseY = 2.25 * scale;
-  const h = Math.max(0.4, topY - baseY);
-  const r = 0.42 * scale;
-  room.add(cyl(r, r, h, pipeMat, x, baseY + h * 0.5, z, 16));
-  if (anim) {
-    if (!anim.enginePipes) anim.enginePipes = [];
-    anim.enginePipes.push(pipeMat);
+  const hWorld = Math.max(0.4, topY - baseY);
+  const hLocal = hWorld / scale;
+  const yLocal = (baseY + hWorld * 0.5) / scale;
+  const pipe = cyl(0.42, 0.42, hLocal, pipeMat, 0, yLocal, 0, 16);
+  parent.add(pipe);
+  return { pipe, pipeMat };
+}
+
+function engineRodHoloMaps(cost) {
+  const lines = ["Repair", String(cost) + " data points"];
+  const orange = makeHoloLinesTexture(lines, {
+    fill: "#ff9944",
+    shadow: "rgba(200, 80, 20, 0.9)",
+    fontPx: 36,
+  });
+  const bright = makeHoloLinesTexture(lines, {
+    fill: "#ffe0a8",
+    shadow: "rgba(255, 160, 60, 0.95)",
+    fontPx: 36,
+  });
+  return { orange, bright, aspect: Math.max(0.5, orange.aspect || 1.6) };
+}
+
+function engineRodHoloSize(maps) {
+  const planeH = 0.44;
+  const planeW = Math.min(2.6, planeH * (maps.aspect || 1.2));
+  return { planeH, planeW };
+}
+
+function applyEngineRodHoloCost(holo, cost) {
+  if (!holo || holo.userData.cost === cost) return;
+  const maps = engineRodHoloMaps(cost);
+  holo.userData.cost = cost;
+  holo.userData.baseMap = maps.orange.tex;
+  holo.userData.hoverMap = maps.bright.tex;
+  if (holo.material) {
+    holo.material.map = maps.orange.tex;
+    holo.material.needsUpdate = true;
+  }
+  const { planeH, planeW } = engineRodHoloSize(maps);
+  if (holo.geometry) holo.geometry.dispose();
+  holo.geometry = new THREE.PlaneGeometry(planeW, planeH);
+}
+
+function makeEngineRodHolo(cost = ENGINE_ROD_COST) {
+  const maps = engineRodHoloMaps(cost);
+  const { planeH, planeW } = engineRodHoloSize(maps);
+  const holo = new THREE.Mesh(
+    new THREE.PlaneGeometry(planeW, planeH),
+    new THREE.MeshBasicMaterial({
+      map: maps.orange.tex,
+      transparent: true,
+      opacity: 0.58,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      toneMapped: false,
+    })
+  );
+  holo.renderOrder = 3;
+  holo.userData.engineRodHolo = true;
+  holo.userData.cost = cost;
+  holo.userData.baseMap = maps.orange.tex;
+  holo.userData.hoverMap = maps.bright.tex;
+  holo.userData.baseOpacity = 0.58;
+  holo.userData.hoverOpacity = 0.98;
+  return holo;
+}
+
+function applyEngineRodColor(rod, redAmt) {
+  const u = Math.max(0, Math.min(1, redAmt));
+  const r = 1;
+  const g = 0.48 * (1 - u) + 0.06 * u;
+  const b = 0.09 * (1 - u) + 0.03 * u;
+  const er = 1;
+  const eg = 0.38 * (1 - u) + 0.04 * u;
+  const eb = 0.05 * (1 - u) + 0.02 * u;
+  const eInt = 0.55 + u * 0.85;
+  if (rod.coreMat) {
+    rod.coreMat.color.setRGB(r, g, b);
+    if (rod.coreMat.emissive) rod.coreMat.emissive.setRGB(er, eg, eb);
+    rod.coreMat.emissiveIntensity = 1.15 + u * 0.7;
+  }
+  if (rod.pipeMat) {
+    rod.pipeMat.color.setRGB(r, g, b);
+    if (rod.pipeMat.emissive) rod.pipeMat.emissive.setRGB(er, eg, eb);
+    rod.pipeMat.emissiveIntensity = eInt;
+  }
+  if (rod.halo) {
+    rod.halo.color.setRGB(r, g * 0.55, b * 0.4);
+    rod.halo.intensity = (rod.haloGain || 1.4) * (0.7 + u * 1.15) * (rod.scale || 1);
+  }
+  if (rod.barMat) {
+    rod.barMat.color.setRGB(r, g, b);
+    if (rod.barMat.emissive) rod.barMat.emissive.setRGB(er, eg, eb);
+    rod.barMat.emissiveIntensity = 0.55 + u * 0.75;
+    rod.barMat.metalness = 0.28;
+    rod.barMat.roughness = 0.38;
+  }
+}
+
+function applyHealthyEngineRodPulse(rod, t) {
+  const pulse = (Math.sin(t * 2.4 + (rod.phase || 0)) + 1) * 0.5;
+  const r = 1;
+  const g = 0.48 + pulse * 0.3;
+  const b = 0.09 + pulse * 0.38;
+  const er = 1;
+  const eg = 0.38 + pulse * 0.28;
+  const eb = 0.05 + pulse * 0.28;
+  const eInt = 0.38 + pulse * 0.32;
+  if (rod.coreMat) {
+    rod.coreMat.color.setRGB(r, g, b);
+    if (rod.coreMat.emissive) rod.coreMat.emissive.setRGB(er, eg, eb);
+    rod.coreMat.emissiveIntensity = 1.2 + pulse * 0.35;
+  }
+  if (rod.pipeMat) {
+    rod.pipeMat.color.setRGB(r, g, b);
+    if (rod.pipeMat.emissive) rod.pipeMat.emissive.setRGB(er, eg, eb);
+    rod.pipeMat.emissiveIntensity = eInt;
+  }
+  if (rod.halo) {
+    rod.halo.color.setRGB(r, g * 0.7, b * 0.45);
+    rod.halo.intensity = (rod.haloGain || 1.4) * (0.85 + pulse * 0.35) * (rod.scale || 1);
+  }
+  if (rod.barMat) {
+    rod.barMat.color.setHex(METAL);
+    if (rod.barMat.emissive) rod.barMat.emissive.setHex(0x000000);
+    rod.barMat.emissiveIntensity = 0;
+    rod.barMat.metalness = 0.55;
+    rod.barMat.roughness = 0.32;
+  }
+  if (rod.core) {
+    const s = 1 + Math.sin(t * 3 + (rod.phase || 0)) * 0.06;
+    rod.core.scale.setScalar(s);
+  }
+}
+
+function registerEngineRod(anim, room, parts, opts = {}) {
+  if (!anim.engineRods) anim.engineRods = [];
+  const id = opts.id || "engine-rod-" + anim.engineRods.length;
+  const g = parts.group;
+  const hitMat = new THREE.MeshBasicMaterial({
+    colorWrite: false,
+    depthWrite: false,
+    depthTest: false,
+    side: THREE.DoubleSide,
+    toneMapped: false,
+  });
+  const hitH = 3.55;
+  const hit = new THREE.Mesh(new THREE.CylinderGeometry(0.98, 0.98, hitH, 14), hitMat);
+  hit.position.y = hitH * 0.48;
+  hit.frustumCulled = false;
+  hit.userData.engineRodHit = true;
+  hit.userData.rodId = id;
+  g.add(hit);
+
+  const center = !!opts.center;
+  const cost = engineRodCost({ center, id });
+  const holo = makeEngineRodHolo(cost);
+  holo.position.set(0, 1.35, 0.92);
+  holo.userData.rodId = id;
+  g.add(holo);
+
+  const rod = {
+    id,
+    center,
+    cost,
+    room,
+    group: g,
+    core: parts.core,
+    coreMat: parts.coreMat,
+    pipeMat: parts.pipeMat,
+    barMat: parts.barMat || null,
+    halo: parts.halo || null,
+    haloGain: opts.haloGain ?? 1.4,
+    scale: opts.scale ?? 1,
+    repaired: isEngineRodRepaired(id),
+    hitPlane: hit,
+    repairHolo: holo,
+    phase: Math.random() * Math.PI * 2,
+    surgeWait: 0.25 + Math.random() * 1.4,
+    redT: 0,
+  };
+  anim.engineRods.push(rod);
+  if (rod.repaired) {
+    holo.visible = false;
+    hit.visible = false;
+    applyHealthyEngineRodPulse(rod, 0);
+  }
+  return rod;
+}
+
+export function repairEngineRod(rod) {
+  if (!rod || rod.repaired) return false;
+  rod.repaired = true;
+  markEngineRodRepaired(rod.id);
+  if (rod.repairHolo) rod.repairHolo.visible = false;
+  if (rod.hitPlane) rod.hitPlane.visible = false;
+  applyHealthyEngineRodPulse(rod, 0);
+  return true;
+}
+
+export function engineRodsLeft(anim) {
+  return (anim?.engineRods || []).filter((r) => !r.repaired).length;
+}
+
+export function resetEngineRods(anim) {
+  for (const rod of anim?.engineRods || []) {
+    rod.repaired = false;
+    rod.redT = 0;
+    rod.surgeWait = 0.2 + Math.random() * 1.1;
+    if (rod.repairHolo) {
+      rod.repairHolo.visible = true;
+      if (rod.repairHolo.material) {
+        if (rod.repairHolo.userData.baseMap) {
+          rod.repairHolo.material.map = rod.repairHolo.userData.baseMap;
+        }
+        rod.repairHolo.material.opacity = rod.repairHolo.userData.baseOpacity ?? 0.58;
+        rod.repairHolo.scale.set(1, 1, 1);
+      }
+    }
+    if (rod.hitPlane) rod.hitPlane.visible = true;
+  }
+}
+
+const _rodHoloLook = new THREE.Vector3();
+export function updateEngineRods(anim, dt, t, playerPos) {
+  const rods = anim?.engineRods;
+  if (!rods?.length) return;
+  const px = playerPos?.x ?? 0;
+  const pz = playerPos?.z ?? 0;
+  const nearR2 = 6.2 * 6.2;
+  const engineSos = isWorkRoomSos("engine", anim);
+  for (const rod of rods) {
+    if (rod.repaired) {
+      applyHealthyEngineRodPulse(rod, t);
+      if (rod.repairHolo) rod.repairHolo.visible = false;
+      if (rod.hitPlane) rod.hitPlane.visible = false;
+      continue;
+    }
+    if (engineSos) {
+      if (rod.repairHolo) rod.repairHolo.visible = false;
+      if (rod.hitPlane) rod.hitPlane.visible = false;
+    } else if (rod.hitPlane) {
+      rod.hitPlane.visible = true;
+    }
+    rod.surgeWait -= dt;
+    if (rod.surgeWait <= 0) {
+      rod.redT = 2.4 + Math.random() * 2.8;
+      rod.surgeWait = 0.55 + Math.random() * 1.4;
+    }
+    if (rod.redT > 0) rod.redT -= dt;
+    const flashing = rod.redT > 0;
+    const redAmt = flashing
+      ? 0.82 + 0.18 * Math.sin(t * 3.2 + rod.phase)
+      : 0.06 + 0.08 * Math.sin(t * 5.5 + rod.phase);
+    applyEngineRodColor(rod, redAmt);
+    if (rod.core) {
+      const jitter = flashing ? 0.09 : 0.04;
+      rod.core.scale.setScalar(1 + Math.sin(t * (flashing ? 11 : 3.2) + rod.phase) * jitter);
+    }
+    const h = rod.repairHolo;
+    if (h) {
+      applyEngineRodHoloCost(h, engineRodCost(rod));
+      rod.group.getWorldPosition(_rodHoloLook);
+      const dx = px - _rodHoloLook.x;
+      const dz = pz - _rodHoloLook.z;
+      const near = dx * dx + dz * dz <= nearR2;
+      h.visible = !engineSos && (near || !!rod._aimHover);
+      if (h.visible) {
+        const ang = Math.atan2(dx, dz);
+        h.position.set(Math.sin(ang) * 0.95, 1.35, Math.cos(ang) * 0.95);
+        h.rotation.y = ang;
+        if (!rod._aimHover && h.material) {
+          const base = h.userData.baseOpacity ?? 0.58;
+          h.material.opacity = base + Math.sin(t * 1.7 + rod.phase) * 0.05;
+        }
+      }
+    }
   }
 }
 
@@ -7766,7 +9290,7 @@ function makeHoloLabel(text, size = 128, opts = {}) {
  * Central Info Hub floaty — shrinks when approached; Year 4–9 orbs emerge around it.
  */
 function createInfoHubArchive(hub, anim) {
-  const YEARS = [4, 5, 6, 7, 8, 9];
+  const YEARS = [];
   const root = new THREE.Group();
   root.position.y = 1.48;
   hub.add(root);
@@ -7827,6 +9351,7 @@ function createInfoHubArchive(hub, anim) {
       mesh,
       label,
       angle,
+      href: `../y${year}/`,
       baseColor: new THREE.Color(0xf0a428),
       baseEmissive: new THREE.Color(0xc87818),
       labelBase: labelBaseColor.clone(),
@@ -7928,8 +9453,8 @@ function createInfoHubArchive(hub, anim) {
       core.rotation.x = Math.sin(t * 0.4) * 0.12;
 
       // Keep "Year" just above the centre mesh — only once approached
-      const titleShow = expand > 0.08;
-      yearTitle.visible = titleShow;
+      const titleShow = false;
+      yearTitle.visible = false;
       yearTitle.position.y = core.position.y + 0.55 * coreScale + 0.28;
       yearTitle.scale.setScalar(THREE.MathUtils.lerp(0.01, 0.72, Math.min(1, expand / 0.35)));
       if (camera && titleShow) yearTitle.lookAt(camera.position);
@@ -8041,6 +9566,78 @@ function isInfoHubDebugged(anim) {
   return mons.length > 0 && mons.every((m) => m.debugged);
 }
 
+/** Menu destinations. yaw: 0 looks south (−Z), PI looks north (+Z). */
+export const GOTO_ROOMS = [
+  { id: "cockpit", name: "Cockpit", x: 0, z: 19.85, yaw: Math.PI },
+  { id: "hub", name: "Info Hub", x: 0, z: 6.7, yaw: 0 },
+  { id: "garden", name: "Garden", x: -7.85, z: 4.5, yaw: Math.PI / 2, doorTag: "garden" },
+  { id: "dorm", name: "Dorm", x: -12.2, z: -10.25, yaw: Math.PI / 2, doorTag: "dorm", needHub: true },
+  { id: "diner", name: "Diner", x: 7.85, z: 4.5, yaw: -Math.PI / 2, doorTag: "diner" },
+  { id: "washroom", name: "Washroom", x: 12.4, z: -10.25, yaw: -Math.PI / 2, doorTag: "washroom", needHub: true },
+  { id: "engine", name: "Engine room", x: 0, z: -21.55, yaw: 0, doorTag: "engine", needHub: true },
+];
+
+/** Map a walk-zone label to a Go-to room id, or "" if the player is in a corridor. */
+export function gotoIdForZoneLabel(label) {
+  const L = String(label || "").toLowerCase();
+  if (L.includes("cockpit") || L.includes("control")) return "cockpit";
+  if (L.includes("garden")) return "garden";
+  if (L.includes("diner") || L.includes("kitchen")) return "diner";
+  if (L.includes("crew quarters") || L.includes("dorm")) return "dorm";
+  if (L.includes("washroom") || L.includes("hygiene")) return "washroom";
+  if (L.includes("engine room")) return "engine";
+  if (L.includes("hub")) return "hub";
+  return "";
+}
+
+/** Walk the NPC wake corridor: face each door, then follow that room's assigned path. */
+export function playerPathToRoom(fromX, fromZ, roomId) {
+  const dest = GOTO_ROOMS.find((s) => s.id === roomId);
+  const goal = dest && SHIP_WALK_POS[roomId] ? roomId : "hub";
+  const pts = walkSpineTo(fromX, fromZ, goal);
+  if (dest) pts.push({ x: dest.x, z: dest.z });
+  return compactWalkPath(pts);
+}
+
+const _monStandPos = new THREE.Vector3();
+const _monStandQuat = new THREE.Quaternion();
+const _monStandFwd = new THREE.Vector3();
+
+/** Stand in front of an SOS wall monitor and look at the glass. */
+export function standPoseForWallMonitor(wm) {
+  const g = wm?.group;
+  if (!g) return null;
+  g.updateWorldMatrix(true, false);
+  g.getWorldPosition(_monStandPos);
+  g.getWorldQuaternion(_monStandQuat);
+  _monStandFwd.set(0, 0, 1).applyQuaternion(_monStandQuat);
+  _monStandFwd.y = 0;
+  if (_monStandFwd.lengthSq() < 1e-8) _monStandFwd.set(0, 0, 1);
+  _monStandFwd.normalize();
+  const dist = Math.max(1.65, Math.min(2.28, (wm.maxW || 2) * 0.38 + 1.2));
+  const x = _monStandPos.x + _monStandFwd.x * dist;
+  const z = _monStandPos.z + _monStandFwd.z * dist;
+  const yaw = Math.atan2(_monStandFwd.x, _monStandFwd.z);
+  const pitch = Math.max(-0.22, Math.min(0.2, Math.atan2(_monStandPos.y - 1.62, dist) * 0.7));
+  return { x, z, yaw, pitch };
+}
+
+export function isGotoRoomOpen(spec, autoDoors, anim) {
+  if (!spec) return false;
+  if (spec.needHub && !isInfoHubDebugged(anim)) return false;
+  if (!spec.doorTag) return true;
+  return facilityDoorOpen(autoDoors, spec.doorTag);
+}
+
+/** locked = unknown, sos = unlocked not debugged, ok = restored. */
+export function gotoRoomStatus(spec, autoDoors, anim, blocked = false) {
+  if (!spec) return "locked";
+  if (spec.id !== "cockpit" && blocked) return "locked";
+  if (!isGotoRoomOpen(spec, autoDoors, anim)) return "locked";
+  if (isWorkRoomSos(spec.id, anim)) return "sos";
+  return "ok";
+}
+
 function makeLaserFenceTex() {
   const c = document.createElement("canvas");
   c.width = 256;
@@ -8150,7 +9747,7 @@ export function updateSouthCorridorGate(anim, player, dt) {
     if (u >= 1) {
       player.position.y = player.eye;
       player._applyCamera?.();
-      player.inputFrozen = false;
+      player.inputFrozen = true;
       gate.toss = null;
     }
     return false;
@@ -8204,7 +9801,7 @@ export function buildShip(scene) {
 
   const colliders = [];
   const zones = [];
-  const anim = { screens: [], bars: [], rings: [], screenRings: [], cores: [], engineLights: [], blinkers: [], hubNeon: null, sittingCrew: [], patrolCrew: [], sleepingCrew: [], enginePipes: [], deliciousNeon: null, plants: [], activePlant: null, sosRooms: [], sosActive: true, pendingSosRestore: [], wallMonitors: [], infoHubHolos: [], beds: [] };
+  const anim = { screens: [], bars: [], rings: [], screenRings: [], cores: [], engineLights: [], blinkers: [], hubNeon: null, sittingCrew: [], patrolCrew: [], sleepingCrew: [], enginePipes: [], deliciousNeon: null, plants: [], activePlant: null, sosRooms: [], sosActive: true, pendingSosRestore: [], wallMonitors: [], infoHubHolos: [], beds: [], engineRods: [] };
   const autoDoors = [];
   const interactables = [];
   const doorKeys = new Set();
@@ -8246,9 +9843,10 @@ export function buildShip(scene) {
     interactive: true,
     radius: 0.38,
   });
+  const sideDeskX = 4;
   makeConsole(bridge, 0, 0, 1.4, 0);
-  makeConsole(bridge, -4.5, 0, 2.0, 0.35);
-  makeConsole(bridge, 4.5, 0, 2.0, -0.35);
+  makeConsole(bridge, -sideDeskX, 0, 2.0, 0.35);
+  makeConsole(bridge, sideDeskX, 0, 2.0, -0.35);
   const deskOptions = makeCockpitDeskOptions(bridge);
 
   // seat behind a desk in desk-local space (localX along width, localZ toward chairs)
@@ -8266,22 +9864,17 @@ export function buildShip(scene) {
   {
     const p = deskSeat(0, 1.4, 0, 0, -1.2);
     makeChair(bridge, p.x, 0, p.z, p.rotY, chairTone);
-    registerWorkSeat("nova", control, p.x, p.z, p.rotY, stageH);
+    registerWorkSeat("cockpit", control, p.x, p.z, p.rotY, stageH);
   }
   // side desks — two chairs each
   for (const desk of [
-    { x: -4.5, z: 2.0, rot: 0.35 },
-    { x: 4.5, z: 2.0, rot: -0.35 },
+    { x: -sideDeskX, z: 2.0, rot: 0.35 },
+    { x: sideDeskX, z: 2.0, rot: -0.35 },
   ]) {
     for (const lx of [-0.58, 0.58]) {
       const p = deskSeat(desk.x, desk.z, desk.rot, lx);
       makeChair(bridge, p.x, 0, p.z, p.rotY, chairTone);
-      let who = null;
-      if (desk.x > 0 && lx < 0) who = "rex";
-      else if (desk.x > 0 && lx > 0) who = "pax";
-      else if (desk.x < 0 && lx > 0) who = "aden";
-      else if (desk.x < 0 && lx < 0) who = "sable";
-      if (who) registerWorkSeat(who, control, p.x, p.z, p.rotY, stageH);
+      registerWorkSeat("cockpit", control, p.x, p.z, p.rotY, stageH);
     }
   }
   makeBigScreen(control, anim, -7.5, 2.1, 2.2, 2.0, 1.4, Math.PI / 2);
@@ -8397,18 +9990,42 @@ export function buildShip(scene) {
   garden.add(soil);
   makeNeonSoilBorder(garden, 10, 7.5);
   const plantSpots = [
-    [-3.5, -2.5], [-1.5, -2.8], [0.5, -2.4], [2.5, -2.6], [4.0, -2.2],
+    [-3.5, -2.5], [-1.5, -2.8], [0.5, -2.4], [2.5, -2.6],
     [-3.2, 0.2], [-1.0, 0.5], [1.2, 0.1], [3.2, 0.4],
     [-3.4, 2.6], [-1.2, 2.8], [1.0, 2.4], [3.4, 2.7],
   ];
-  plantSpots.forEach(([px, pz], i) => {
-    const tone = i % 3 === 0 ? 0xc43838 : 0x2d8a45;
-    makePlant(
-      garden, px, 0.1, pz, 0.85 + (i % 3) * 0.15, tone,
-      anim, interactables, garden.position.x, garden.position.z,
-    );
-  });
-  makeTable(garden, -4.2, 0, -4.2, 1.2, 0.6);
+  const treeTones = [
+    0x2d8a45, // green
+    0xc43838, // red
+    0x2f6fe0, // blue
+    0x8a3ec8, // purple
+    0xe07a1c, // orange
+    0xd4b41e, // yellow
+    0x1fa89a, // teal
+    0x8fd42a, // lime
+  ];
+  anim.gardenRoom = garden;
+  anim.treeSlots = plantSpots.map(([sx, sz], i) => ({
+    x: sx,
+    z: sz,
+    tone: treeTones[i % treeTones.length],
+    scale: 0.85 + (i % 3) * 0.15,
+    filled: false,
+    plant: null,
+  }));
+  const table = makeTable(garden, -4.2, 0, -4.2, 1.2, 0.6);
+  const pot = makeWateringPot();
+  pot.position.set(0.02, 0.81, 0);
+  pot.rotation.y = Math.PI * 0.28;
+  table.add(pot);
+  anim.growTree = {
+    holo: pot.userData.label,
+    hit: pot.userData.hit,
+    pot,
+    table,
+    room: garden,
+  };
+  restoreGrownTrees(anim);
   // bluish fake-data wall monitor on the far (west) end
   decorateWallMonitors(garden, anim, [
     [-5.7, 2.15, 0, Math.PI / 2, 2.6, 1.55],
@@ -8431,7 +10048,9 @@ export function buildShip(scene) {
   makeCoffeeTable(conf, 1.3, 0, 1.35, 0.9, 0.55);
   // carpet further toward the screen — clear of the coffee tables
   makeLoungeCarpet(conf, 0.3, 3.15, 4.6, 2.6);
-  makeBigScreen(conf, anim, 0, 2.1, 4.8, 5.2, 2.4, Math.PI);
+  const dinerNorthZ = (conf.userData.dims?.d ?? 11) * 0.5 - 0.22 - 0.04;
+  makeBigScreen(conf, anim, 0, 2.1, dinerNorthZ, 5.2, 2.4, Math.PI);
+  const dinerRoster = makeDinerRosterBoard(conf, dinerNorthZ);
   // fridges on north-east
   makeFridge(conf, 5.0, 0, 4.55, -Math.PI / 2);
   makeFridge(conf, 5.0, 0, 3.25, -Math.PI / 2);
@@ -8453,16 +10072,20 @@ export function buildShip(scene) {
   [-4.4, -3.4, -2.4, -1.4, -0.4].forEach((x, i) => {
     makeChair(conf, x, 0, -2.0, Math.PI, dinerChairColors[i]);
     makeChair(conf, x, 0, -4.0, 0, dinerChairColors[i + 5]);
-    if (x === -0.4) registerWorkSeat("tess", conf, x, -2.0, Math.PI);
+    if (x === -0.4) registerWorkSeat("diner", conf, x, -2.0, Math.PI);
   });
   anim.diner = {
     stove: dinerStove,
     washer: dinerWasher,
-    seat: WORK_SEATS.tess,
+    seat: WORK_SEAT_POOLS.diner?.[0] || null,
     stoveStand: dinerStove.userData.stand,
     washStand: dinerWasher.userData.stand,
     stoveFace: Math.PI,
     washFace: Math.PI,
+    rosterBoard: dinerRoster,
+    rosterHit: dinerRoster.userData.hit,
+    rosterPaper: dinerRoster.userData.paper,
+    rosterClipMat: dinerRoster.userData.clipMat,
   };
   // neon script on south wall behind the dining table
   makeDeliciousNeon(conf, anim, -2.6, 2.75, -5.12);
@@ -8531,14 +10154,14 @@ export function buildShip(scene) {
     const bedN = makeBed(crew, bx, 0, 4.15, Math.PI, bedTones[i], interactables, crew.position.x, crew.position.z);
     const bedS = makeBed(crew, bx, 0, -4.15, 0, bedTones[i + 6], interactables, crew.position.x, crew.position.z);
     anim.beds.push(bedN, bedS);
-    const takeN = i !== 5;
-    const takeS = i !== 4;
+    const takeN = true;
+    const takeS = true;
     if (takeN) {
       const spec = CREW_ROSTER[anim.sleepingCrew.length];
       if (spec) {
         const av = layCrewInBed(bedN, spec);
         anim.sleepingCrew.push(av);
-        if (isNpcActivated(spec.id)) placeNpcAtWork(av, root);
+        if (isNpcActivated(spec.id)) placeNpcAtWork(av, root, anim);
       }
     }
     if (takeS) {
@@ -8546,7 +10169,7 @@ export function buildShip(scene) {
       if (spec) {
         const av = layCrewInBed(bedS, spec);
         anim.sleepingCrew.push(av);
-        if (isNpcActivated(spec.id)) placeNpcAtWork(av, root);
+        if (isNpcActivated(spec.id)) placeNpcAtWork(av, root, anim);
       }
     }
   });
@@ -8569,12 +10192,12 @@ export function buildShip(scene) {
   });
   zones.push(toilets.userData);
 
-  // 5 toilet + 5 shower slots — banks snug against N/S walls
+  // 6 toilet + 5 shower slots — one default toilet, five printable extras
   anim.toiletSlots = [];
   makeStallBank(toilets, colliders, interactables, toiletsOx, toiletsOz, {
-    cx: 2.0,
+    cx: 1.4,
     cz: 3.25,
-    count: 5,
+    count: 6,
     stallW: 1.55,
     depth: 2.05,
     rotY: Math.PI,
@@ -8598,48 +10221,45 @@ export function buildShip(scene) {
   const sinkX = -4.05;
   const sinkZ = -3.72;
   makeWashSink(toilets, sinkX, 0, sinkZ, Math.PI / 2, { width: sinkW, taps: 4 });
-  // Long sink mirror doubles as the washroom SOS wall monitor (orange in alert)
-  const mirrorGlass = mat(0x0a2030, {
-    metalness: 0.45,
-    roughness: 0.22,
-    emissive: 0x1a90cc,
-    emissiveIntensity: 0.85,
+  // Long sink glass stays a silver deco mirror (not a data screen)
+  const mirrorGlass = mat(0x9aa8b4, {
+    metalness: 0.92,
+    roughness: 0.08,
+    emissive: 0x1a2834,
+    emissiveIntensity: 0.1,
   });
-  const mirrorFrame = mat(0xb8c0c8, {
-    metalness: 0.65,
-    roughness: 0.28,
-    emissive: 0x3ec8ff,
-    emissiveIntensity: 0.28,
+  const mirrorFrame = mat(0xd0d6dc, {
+    metalness: 0.72,
+    roughness: 0.26,
   });
   toilets.add(box(sinkW * 0.92, 1.05, 0.04, mirrorFrame, sinkX, 1.95, -4.28));
   toilets.add(box(sinkW * 0.86, 0.95, 0.03, mirrorGlass, sinkX, 1.95, -4.25));
-  const mirrorAnchor = new THREE.Object3D();
-  // Sit in front of the glass (into the room) so the debug label is readable
-  mirrorAnchor.position.set(sinkX, 1.95, -4.20);
-  toilets.add(mirrorAnchor);
-  const washWm = registerWallMonitor(anim, toilets, mirrorAnchor, {
-    screenMat: mirrorGlass,
-    barMats: [],
-    ringMats: [],
-    underGlowMat: mirrorFrame,
-  }, { maxW: 2.6, maxH: 0.82, z: 0.06, y: -0.16, prominent: true });
+  // Far-wall SOS / restored-blue monitor — debug this panel to clear washroom SOS
+  decorateWallMonitors(toilets, anim, [
+    [5.72, 2.22, 0, -Math.PI / 2, 3.15, 1.85],
+  ]);
+  const washWm = (anim.wallMonitors || []).find((m) => m.room === toilets);
+  // 3D-print prompt lives on the long sink mirror, not the wall monitor
   const printHolo = makeToiletPrintHolo();
-  printHolo.position.set(0, -0.18, 0.07);
-  mirrorAnchor.add(printHolo);
-  anim.toiletPrint = { holo: printHolo, wm: washWm };
-  syncToiletPrintHolo(anim);
-  interactables.push({
-    kind: "toiletPrint",
-    position: new THREE.Vector3(toiletsOx + sinkX, 1.7, toiletsOz + sinkZ + 0.55),
-    radius: 2.2,
-    active() {
-      return !!anim.toiletPrint?.holo?.visible;
-    },
-    prompt() {
-      return "Press E · 3D print a toilet · 10 data points";
-    },
-    toggle() {},
+  printHolo.position.set(sinkX, 1.72, -4.20);
+  const printMarquee = makeToiletMarquee();
+  printMarquee.position.set(sinkX, 2.08, -4.20);
+  const printHitMat = new THREE.MeshBasicMaterial({
+    colorWrite: false,
+    depthWrite: false,
+    depthTest: false,
+    side: THREE.DoubleSide,
+    toneMapped: false,
   });
+  const printHit = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 0.85), printHitMat);
+  printHit.position.set(sinkX, 1.72, -4.18);
+  printHit.frustumCulled = false;
+  printHit.userData.toiletPrintHit = true;
+  toilets.add(printHolo);
+  toilets.add(printMarquee);
+  toilets.add(printHit);
+  anim.toiletPrint = { holo: printHolo, hit: printHit, wm: washWm, marquee: printMarquee };
+  syncToiletPrintHolo(anim);
   styleRoomLighting(toilets, "hygiene");
   enableSos(toilets, anim);
 
@@ -8678,30 +10298,40 @@ export function buildShip(scene) {
     [-4.2, 2.0, 0.92], [4.2, 2.0, 0.92],
     [0, -0.5, 1.55],
   ];
-  for (const [ex, ez, sc] of engineSpots) {
+  engineSpots.forEach(([ex, ez, sc], i) => {
     const isPrimary = sc > 1.2;
-    makeEngineCore(engine, anim, ex, 0, ez, {
+    const built = makeEngineCore(engine, anim, ex, 0, ez, {
       scale: sc,
-      light: isPrimary,
+      light: true,
+      haloGain: isPrimary ? 2.2 : 0.95,
     });
-    makeEngineCeilingPipes(engine, anim, ex, ez, engineH, sc);
-  }
+    const pipes = makeEngineCeilingPipes(built.group, engineH, sc);
+    registerEngineRod(anim, engine, {
+      group: built.group,
+      core: built.core,
+      coreMat: built.coreMat,
+      halo: built.halo,
+      barMat: built.barMat,
+      pipeMat: pipes.pipeMat,
+    }, { id: "engine-rod-" + i, scale: sc, haloGain: isPrimary ? 2.2 : 0.95, center: isPrimary });
+  });
   // study stations on the side walls, facing the engine bay
   // study stations pulled inward from the side walls
   makeConsole(engine, -5.2, 0, -0.5, Math.PI / 2);
   makeChair(engine, -6.2, 0, -0.5, Math.PI / 2, 0x8a9088);
   makeConsole(engine, 5.2, 0, -0.5, -Math.PI / 2);
   makeChair(engine, 6.2, 0, -0.5, -Math.PI / 2, 0x8a9088);
-  registerWorkSeat("kai", engine, 6.2, -0.5, -Math.PI / 2);
+  registerWorkSeat("engine", engine, 6.2, -0.5, -Math.PI / 2);
+  registerWorkSeat("engine", engine, -6.2, -0.5, Math.PI / 2);
   for (const av of anim.sleepingCrew) {
     if (!isNpcActivated(av.userData.npcId)) continue;
     if (av.userData.state === "sleeping") continue;
-    placeNpcAtWork(av, root);
+    placeNpcAtWork(av, root, anim);
   }
   // SOS orange wall monitor on west wall (north of side console)
   decorateWallMonitors(engine, anim, [
     [-7.75, 2.45, 3.15, Math.PI / 2, 3.1, 1.75],
-  ]);
+  ], { bezelGrey: true });
   styleRoomLighting(engine, "engine");
   enableSos(engine, anim);
   // keep HUD / door labels as Engine Room
@@ -9075,6 +10705,276 @@ export const ROOM_RESTORED_LINES = [
   "Power and light nominal in {room}.",
   "Captain, {room} is functional — archive fragment held.",
 ];
+
+export function pickRoomBriefLine(roomName) {
+  const L = String(roomName || "").toLowerCase();
+  if (L.includes("garden")) return "Crew working in the garden harvest data points weekly. Each gardener harvests 1 data point from every tree, every week.";
+  if (L.includes("diner")) return "Active crew can be reassigned in the diner. Without a chef it costs 5 data points.";
+  if (L.includes("hub")) return "Captain, here's our progress to fix our ship: repair doors, debug rooms, wake crew, print toilets, repair engines, grow trees, and reassign posts in the diner.";
+  if (L.includes("crew") || L.includes("dorm")) return "Crew posts: garden harvest, cockpit engine discount, engine repair discount, diner role changes, and washroom toilet printing.";
+  if (L.includes("wash")) return "Extra toilets can be 3D-printed in the washroom for 10 data points. Each washroom staff reduces print cost by 5. Each extra toilet adds +2 active crew capacity.";
+  if (L.includes("engine")) return "Every repaired engine reduces the cost to wake a crew member by 10 data points. Each engine crew reduces centre rod repair cost by 600 data points.";
+  if (L.includes("cockpit")) return "Each crew officer working in the cockpit reduces engine repair cost by 10 data points.";
+  return "Room systems are nominal.";
+}
+
+export function pickRoomBriefHtml(roomName, anim = null, autoDoors = null) {
+  const L = String(roomName || "").toLowerCase();
+  if (L.includes("garden")) {
+    return "<p>Crew working in the garden harvest data points weekly. Each gardener harvests <strong>1 data point</strong> from every tree, every week. Up to 3 gardeners. Each grow adds <strong>1 tree</strong>. Later grows cost more.</p>";
+  }
+  if (L.includes("diner")) {
+    return "<p>Active crew can be reassigned in the diner. Without a chef it costs <strong>5 data points</strong>.</p>";
+  }
+  if (L.includes("hub")) {
+    const t = shipTodoProgress(anim, autoDoors);
+    return (
+      "<p>Captain, here's our progress to fix our ship!</p><ul class=\"ship-brief-list ship-todo-list\">" +
+      "<li>Repair room doors. " + t.doorsDone + "/" + t.doorsMax + "</li>" +
+      "<li>Debug rooms. " + t.debugDone + "/" + t.debugMax + "</li>" +
+      "<li>Wake crew in the dorm. " + t.crewDone + "/" + t.crewMax + "</li>" +
+      "<li>3D print more toilets. " + t.toiletsDone + "/" + t.toiletsMax + "</li>" +
+      "<li>Repair engines.</li>" +
+      "<li>Grow trees in the garden to get more data points</li>" +
+      "<li>Reassign crew roles at the diner notesheet if necessary</li>" +
+      "</ul>"
+    );
+  }
+  if (L.includes("crew") || L.includes("dorm")) {
+    return (
+      "<p>Crew posts:</p><ul class=\"ship-brief-list\">" +
+      "<li>Crew working in the garden harvest data points weekly.</li>" +
+      "<li>Crew working in the cockpit reduce engine repair cost.</li>" +
+      "<li>Each engine crew reduces centre rod repair cost by 600 data points.</li>" +
+      "<li>Crew working in the diner make role changes free (otherwise 5 data points).</li>" +
+      "<li>Extra toilets can be 3D-printed in the washroom for 10 data points. Each washroom staff reduces print cost by 5.</li>" +
+      "</ul>"
+    );
+  }
+  if (L.includes("wash")) {
+    return "<p>Extra toilets can be 3D-printed in the washroom for <strong>10 data points</strong>. Each washroom staff reduces print cost by <strong>5</strong>. Each extra toilet adds <strong>+2 active crew capacity</strong>. Max 2 staff in the washroom.</p>";
+  }
+  if (L.includes("engine")) {
+    return "<p>Every repaired engine reduces the cost to wake a crew member by <strong>10 data points</strong>. Each engine crew reduces centre rod repair cost by <strong>600 data points</strong>.</p>";
+  }
+  if (L.includes("cockpit")) {
+    return "<p>Each crew officer working in the cockpit reduces engine repair cost by <strong>10 data points</strong>. Max 5 staff in the cockpit.</p>";
+  }
+  return "<p>Room systems are nominal.</p>";
+}
+
+const BRIEF_CRT_FADE_SEC = 5;
+const _briefTex = Object.create(null);
+
+export function briefKeyForRoom(roomName) {
+  const L = String(roomName || "").toLowerCase();
+  if (L.includes("garden")) return "garden";
+  if (L.includes("diner") || L.includes("kitchen")) return "diner";
+  if (L.includes("hub")) return "hub";
+  if (L.includes("crew") || L.includes("dorm")) return "dorm";
+  if (L.includes("wash")) return "washroom";
+  if (L.includes("engine")) return "engine";
+  if (L.includes("cockpit")) return "cockpit";
+  return "hub";
+}
+
+export function briefImageSrc(roomName) {
+  return "img/brief-" + briefKeyForRoom(roomName) + ".webp?v=20260817ae";
+}
+
+function roomBriefTexture(roomName) {
+  const key = briefKeyForRoom(roomName);
+  if (_briefTex[key]) return _briefTex[key];
+  const loader = new THREE.TextureLoader();
+  const tex = loader.load(briefImageSrc(roomName));
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 1;
+  tex.generateMipmaps = false;
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  _briefTex[key] = tex;
+  return tex;
+}
+
+function makeBriefCrtMaterial(map, opts = {}) {
+  const uTime = { value: 0 };
+  const uDying = { value: 0 };
+  const uSweep = { value: opts.sweep === false ? 0 : 1 };
+  const mat = new THREE.MeshBasicMaterial({
+    map,
+    color: 0xffffff,
+    toneMapped: false,
+    transparent: true,
+    depthWrite: false,
+  });
+  mat.uniforms = { uMap: { value: map }, uTime, uDying, uSweep };
+  mat.userData.briefCrt = true;
+  mat.customProgramCacheKey = () => "luac-brief-crt-v6";
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uTime = uTime;
+    shader.uniforms.uDying = uDying;
+    shader.uniforms.uSweep = uSweep;
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        "#include <common>",
+        `#include <common>
+         uniform float uTime;
+         uniform float uDying;
+         uniform float uSweep;`
+      )
+      .replace(
+        "#include <tonemapping_fragment>",
+        `#include <tonemapping_fragment>
+         float scan = 0.5 + 0.5 * sin(vMapUv.y * 220.0 + uTime * 22.0);
+         gl_FragColor.rgb *= 0.97 + 0.06 * scan;
+         float flick = 1.0 - uDying * 0.16 * step(0.86, fract(sin(uTime * 37.1) * 43758.5));
+         float rollY = fract(vMapUv.y + uTime * 0.18 * (0.35 + uDying));
+         float roll = 1.0 - uDying * 0.28 * (1.0 - smoothstep(0.0, 0.08, abs(rollY - 0.5)));
+         float collapse = mix(1.02, 0.018, pow(smoothstep(0.58, 1.0, uDying), 1.45));
+         float band = abs(vMapUv.y - 0.5) * 2.0;
+         float vis = 1.0 - smoothstep(collapse, collapse + 0.05, band);
+         float line = smoothstep(0.04, 0.0, abs(vMapUv.y - 0.5)) * smoothstep(0.72, 1.0, uDying);
+         gl_FragColor.rgb *= flick * roll;
+         float sweepY = 1.0 - fract(uTime * 0.22);
+         float beam = smoothstep(0.011, 0.0, abs(vMapUv.y - sweepY));
+         float trail = (1.0 - smoothstep(0.0, 0.09, vMapUv.y - sweepY)) * step(sweepY, vMapUv.y);
+         vec3 scanCol = vec3(0.28, 0.78, 1.0);
+         gl_FragColor.rgb += scanCol * uSweep * (beam * 1.15 + trail * 0.16);
+         gl_FragColor.rgb += vec3(0.45, 0.82, 1.0) * line * 0.85;
+         gl_FragColor.a *= vis * (1.0 - smoothstep(0.82, 1.0, uDying));`
+      );
+  };
+  return mat;
+}
+
+function setBriefUiHidden(wm, hide) {
+  for (const m of wm.barMeshes || []) m.visible = !hide;
+  for (const m of wm.ringMeshes || []) m.visible = !hide;
+}
+
+function ensureRoomBriefPic(wm) {
+  if (!wm?.group) return null;
+  if (wm.briefPic?.material?.userData?.briefCrt) return wm.briefPic;
+  if (wm.briefPic) {
+    wm.group.remove(wm.briefPic);
+    try {
+      wm.briefPic.geometry?.dispose?.();
+      wm.briefPic.material?.dispose?.();
+    } catch (_) {}
+    wm.briefPic = null;
+  }
+  const w = Math.max(0.4, wm.maxW || 1.6);
+  const h = Math.max(0.28, wm.maxH || 0.9);
+  const diner = briefKeyForRoom(wm.room?.userData?.label) === "diner";
+  const mat = makeBriefCrtMaterial(roomBriefTexture(wm.room?.userData?.label), { sweep: !diner });
+  const pic = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
+  pic.position.set(0, 0, 0.034);
+  pic.renderOrder = 6;
+  wm.group.add(pic);
+  wm.briefPic = pic;
+  return pic;
+}
+
+export function hideRoomBriefing(wm) {
+  if (!wm) return;
+  wm.briefingOn = false;
+  wm.briefFadeT = null;
+  if (wm.briefPic) {
+    wm.briefPic.visible = false;
+    const u = wm.briefPic.material?.uniforms;
+    if (u?.uDying) u.uDying.value = 0;
+  }
+  setBriefUiHidden(wm, false);
+}
+
+export function hideAllRoomBriefings(anim) {
+  for (const wm of anim?.wallMonitors || []) hideRoomBriefing(wm);
+}
+
+export function wallMonitorsForBriefLabel(anim, label) {
+  const key = briefKeyForRoom(label);
+  return (anim?.wallMonitors || []).filter((m) => {
+    if (m.room?.userData?.lightMode === "sos") return false;
+    return briefKeyForRoom(m.room?.userData?.label) === key;
+  });
+}
+
+/** Popup photo box matches that room's wall CRT aspect (maxW / maxH). */
+export function briefMonitorAspect(roomName, anim) {
+  const key = briefKeyForRoom(roomName);
+  let bestW = 0;
+  let bestH = 0;
+  for (const m of anim?.wallMonitors || []) {
+    if (briefKeyForRoom(m.room?.userData?.label) !== key) continue;
+    const w = Number(m.maxW) || 0;
+    const h = Number(m.maxH) || 0;
+    if (w * h > bestW * bestH) {
+      bestW = w;
+      bestH = h;
+    }
+  }
+  if (bestW > 0 && bestH > 0) return bestW / bestH;
+  return 16 / 9;
+}
+
+/** Staff-manual webp CRT on a restored wall monitor. */
+export function showRoomBriefOnMonitor(wm) {
+  if (!wm?.group) return false;
+  const pic = ensureRoomBriefPic(wm);
+  if (!pic) return false;
+  wm.briefingOn = true;
+  wm.briefFadeT = null;
+  pic.visible = true;
+  const u = pic.material?.uniforms;
+  if (u?.uDying) u.uDying.value = 0;
+  setBriefUiHidden(wm, true);
+  return true;
+}
+
+export function showRoomBriefOnLabel(anim, label) {
+  const mons = wallMonitorsForBriefLabel(anim, label);
+  let any = false;
+  for (let i = 0; i < mons.length; i++) {
+    if (showRoomBriefOnMonitor(mons[i])) any = true;
+  }
+  return any;
+}
+
+export function beginRoomBriefCrtFade(wm) {
+  if (!wm?.briefPic || !wm.briefingOn) return;
+  if (wm.briefFadeT == null) wm.briefFadeT = 0;
+}
+
+export function beginRoomBriefCrtFadeAll(anim) {
+  for (const wm of anim?.wallMonitors || []) beginRoomBriefCrtFade(wm);
+}
+
+export function updateRoomBriefFades(anim, t, dt) {
+  const mons = anim?.wallMonitors;
+  if (!mons?.length) return;
+  for (let i = 0; i < mons.length; i++) {
+    const wm = mons[i];
+    const pic = wm?.briefPic;
+    if (!pic?.visible) continue;
+    const u = pic.material?.uniforms;
+    if (u?.uTime) u.uTime.value = t;
+    if (wm.briefFadeT == null) continue;
+    wm.briefFadeT += dt;
+    const k = Math.min(1, wm.briefFadeT / BRIEF_CRT_FADE_SEC);
+    if (u?.uDying) u.uDying.value = k;
+    if (k >= 1) hideRoomBriefing(wm);
+  }
+}
+
+export function toggleRoomBriefing(wm, anim) {
+  if (!wm?.group) return false;
+  if (wm.briefingOn && wm.briefFadeT == null) {
+    beginRoomBriefCrtFade(wm);
+    return false;
+  }
+  hideAllRoomBriefings(anim);
+  return showRoomBriefOnMonitor(wm);
+}
 
 export function pickRoomRestoredLine(roomName) {
   const name = String(roomName || "this room").trim() || "this room";

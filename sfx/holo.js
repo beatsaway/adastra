@@ -2,7 +2,7 @@
  * Hologram UI SFX — hover ticks + Info Hub doorway electric hiss.
  */
 
-import { getAudioCtx, resumeAudio } from "./ctx.js";
+import { getAudioCtx, resumeAudio, busOut } from "./ctx.js?v=20260817al";
 
 let lastHoverAt = 0;
 
@@ -18,7 +18,7 @@ export function playHoloHover() {
   const t0 = ctx.currentTime;
   const master = ctx.createGain();
   master.gain.value = 1;
-  master.connect(ctx.destination);
+  master.connect(busOut("sfx") || ctx.destination);
 
   // Short high soft blip
   const osc = ctx.createOscillator();
@@ -76,7 +76,7 @@ export class InfoHubHoloHiss {
 
     const master = ctx.createGain();
     master.gain.value = 0;
-    master.connect(ctx.destination);
+    master.connect(busOut("sfx") || ctx.destination);
     this._gain = master;
 
     // Looping pink-ish noise as electric static

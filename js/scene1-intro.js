@@ -2,7 +2,7 @@
  * Scene 1 solar-wind clip on the cockpit main screen, before the AI script.
  */
 import * as THREE from "three";
-import { playScene1EnergyField, stopScene1EnergyField } from "../sfx/scene1-field.js?v=20260815ed";
+import { playScene1EnergyField, stopScene1EnergyField } from "../sfx/scene1-field.js?v=20260816u";
 
 const SRC = "scene/scene1.mp4?v=20260815bl";
 

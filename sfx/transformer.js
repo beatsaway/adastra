@@ -3,7 +3,7 @@
  * Very light CPU: 2 oscillators + soft noise, gain follows distance.
  */
 
-import { getAudioCtx, resumeAudio } from "./ctx.js";
+import { getAudioCtx, resumeAudio, busOut } from "./ctx.js?v=20260817al";
 
 export class ProximityTransformerHum {
   constructor() {
@@ -20,7 +20,7 @@ export class ProximityTransformerHum {
 
     const master = ctx.createGain();
     master.gain.value = 0;
-    master.connect(ctx.destination);
+    master.connect(busOut("sfx") || ctx.destination);
     this._gain = master;
 
     // 120Hz transformer hum + harmonic

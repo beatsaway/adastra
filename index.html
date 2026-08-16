@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>Ad Astra · Ship</title>
-  <link rel="stylesheet" href="styles.css?v=20260815fc" />
+  <link rel="stylesheet" href="styles.css?v=20260817ap" />
   <script type="importmap">
   {
     "imports": {
@@ -29,7 +29,7 @@
   <div id="overlay" class="hidden">
     <div class="panel">
       <h1>Systems Online</h1>
-      <p id="enter-note">Collect data points to help rebuild the ship.</p>
+      <p id="enter-note">You start with 1000 data points to rebuild the ship.</p>
       <div class="enter-actions">
         <button id="start-btn" type="button">Enter Ship</button>
       </div>
@@ -41,8 +41,13 @@
     <div id="prompt" class="hidden">Press E</div>
     <button id="help-btn" type="button" aria-label="Menu" title="Menu">
       <span class="menu-caret" aria-hidden="true"></span>
+      <span id="hud-room-name" class="hud-room-name"></span>
     </button>
-    <button id="display-opt" type="button" class="hidden">Fullscreen</button>
+    <div id="top-menu" class="hidden">
+      <div id="room-opt-list"></div>
+      <button id="goto-opt" type="button">Go to …</button>
+      <button id="settings-opt" type="button">Settings</button>
+    </div>
     <div id="mobile-controls" class="hidden">
       <div id="move-zone" class="stick-zone">
         <div id="move-base" class="stick-base"><div id="move-knob" class="stick-knob"></div></div>
@@ -57,6 +62,6 @@
 
   <div id="year-flash" aria-hidden="true"></div>
 
-  <script type="module" src="js/main.js?v=20260815fc"></script>
+  <script type="module" src="js/main.js?v=20260817ap"></script>
 </body>
 </html>

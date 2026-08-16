@@ -2,7 +2,7 @@
  * Hub / year-orb procedural tones — short one-shots, few oscillators.
  */
 
-import { getAudioCtx, resumeAudio } from "./ctx.js";
+import { getAudioCtx, resumeAudio, busOut } from "./ctx.js?v=20260817al";
 
 function rnd(a, b) {
   return a + Math.random() * (b - a);
@@ -23,7 +23,7 @@ function playToneBurst({
   master.gain.setValueAtTime(0.0001, t0);
   master.gain.exponentialRampToValueAtTime(gain, t0 + 0.02);
   master.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-  master.connect(ctx.destination);
+  master.connect(busOut("sfx") || ctx.destination);
 
   for (let i = 0; i < freqs.length; i++) {
     const f0 = freqs[i];
@@ -63,7 +63,7 @@ export function playYearReveal() {
     g.gain.linearRampToValueAtTime(peakGain, t0 + attack);
     g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
     osc.connect(g);
-    g.connect(ctx.destination);
+    g.connect(busOut("sfx") || ctx.destination);
     osc.start(t0);
     osc.stop(t0 + dur + 0.02);
   }
@@ -96,7 +96,7 @@ export function playYearHover() {
   master.gain.setValueAtTime(0.0001, t0);
   master.gain.exponentialRampToValueAtTime(rnd(0.075, 0.1), t0 + 0.018);
   master.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-  master.connect(ctx.destination);
+  master.connect(busOut("sfx") || ctx.destination);
 
   const a = ctx.createOscillator();
   a.type = "sine";
@@ -134,7 +134,7 @@ export function playYearPick() {
   master.gain.setValueAtTime(0.0001, t0);
   master.gain.linearRampToValueAtTime(0.22, t0 + 0.14);
   master.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-  master.connect(ctx.destination);
+  master.connect(busOut("sfx") || ctx.destination);
 
   function swellTone(freq0, freq1, peak, attack, fade) {
     const o = ctx.createOscillator();

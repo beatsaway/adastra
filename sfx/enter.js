@@ -2,7 +2,7 @@
  * Enter Ship — hatch thump + airlock whoosh. Scheduled once, no per-frame work.
  */
 
-import { getAudioCtx, resumeAudio } from "./ctx.js";
+import { getAudioCtx, resumeAudio, busOut } from "./ctx.js?v=20260817al";
 
 function brownNoise(ctx, seconds) {
   const n = Math.max(1, Math.floor(ctx.sampleRate * seconds));
@@ -24,7 +24,7 @@ export function playEnterShip() {
   const t0 = ctx.currentTime;
   const master = ctx.createGain();
   master.gain.value = 1;
-  master.connect(ctx.destination);
+  master.connect(busOut("sfx") || ctx.destination);
 
   const thump = ctx.createOscillator();
   thump.type = "sine";

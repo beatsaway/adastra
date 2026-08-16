@@ -1,14 +1,15 @@
 import * as THREE from "three";
-import { buildShip, createSpaceView, createStatusView, updateAutoDoors, updateStallDoors, nearestInteractable, nearestLockedDoor, LOCKED_DOOR_LINES, INSUFFICIENT_DATAPOINT_LINES, pickStationLockedLine, pickRoomRestoredLine, pickSouthGateLine, pickCockpitExitLine, pickToiletQuotaLine, updateSosLights, updatePlants, updateSleepingCrew, updateAwakeCrew, updateSittingCrew, updateNpcChitchat, updateNpcWiggle, pokeWaitingNpc, waitingNpcFromHit, downgradeMaterialsForMobile, unlockShipDoor, relockAllShipDoors, clearShipBriefingProgress, debugWallMonitor, resetAllRoomSos, applyWallMonitorVisual, setWallMonitorSosBlend, updateWallMonitorSosPulse, toggleBedPod, setBedPodHover, isNpcWorkRoomLocked, bedFromHit, beginNpcWake, sleeperFromHit, resetSleepingCrew, pumpPendingSosRestore, updateHubFloorHalos, updateSouthCorridorGate, printToiletInWashroom, resetPrintedToilets, toiletSlotsLeft, getFacilityBoard, getCrewBoard, wallMonitorsInSameRoom, roomDebugClearsAll } from "./ship.js?v=20260815fc";
-import { createSosCeilingSparks, updateSosCeilingSparks, burstSparksAt } from "./sos-sparks.js?v=20260815ey";
-import { Player } from "./player.js?v=20260815ai";
+import { buildShip, createSpaceView, createStatusView, updateAutoDoors, updateStallDoors, nearestInteractable, nearestLockedDoor, LOCKED_DOOR_LINES, INSUFFICIENT_DATAPOINT_LINES, pickStationLockedLine, pickRoomRestoredLine, pickSouthGateLine, pickCockpitExitLine, pickToiletQuotaLine, updateSosLights, updatePlants, updateSleepingCrew, updateAwakeCrew, updateSittingCrew, updateNpcChitchat, updateNpcWiggle, pokeWaitingNpc, waitingNpcFromHit, downgradeMaterialsForMobile, unlockShipDoor, relockAllShipDoors, clearShipBriefingProgress, debugWallMonitor, resetAllRoomSos, applyWallMonitorVisual, setWallMonitorSosBlend, updateWallMonitorSosPulse, toggleBedPod, setBedPodHover, updateBedPods, isNpcWorkRoomLocked, bedFromHit, beginNpcWake, sleeperFromHit, resetSleepingCrew, pumpPendingSosRestore, updateHubFloorHalos, updateSouthCorridorGate, printToiletInWashroom, resetPrintedToilets, updatePrintedToilets, updateToiletMarquee, toiletSlotsLeft, getFacilityBoard, getCrewBoard, wallMonitorsInSameRoom, roomDebugClearsAll, updateEngineRods, repairEngineRod, engineRodsLeft, growDataTree, treeSlotsLeft, resetGrownTrees, createTreeTeleportFx, updateTreeGrowFx, pickRoomBriefLine, pickRoomBriefHtml, briefImageSrc, briefMonitorAspect, updateRoomBriefFades, isWorkRoomSos, CREW_WORKS, reassignNpcWork, canAssignWork, countWorkAssigned, pickWakeWork, npcWorkRoomName, npcIsCelebrating, bedNpcBusy, GOTO_ROOMS, isGotoRoomOpen, playerPathToRoom, walkBlockedByDoor, gotoIdForZoneLabel, gotoRoomStatus, standPoseForWallMonitor, updateDinerRosterClip } from "./ship.js?v=20260817ap";
+import { createSosCeilingSparks, updateSosCeilingSparks, burstSparksAt } from "./sos-sparks.js?v=20260815fe";
+import { Player } from "./player.js?v=20260817c";
 import { isTouchDevice, setupMobileControls } from "./mobile.js";
 import { HudPrompt } from "./hud-prompt.js?v=20260815cb";
 import {
   DOOR_UNLOCK_COST,
   MONITOR_DEBUG_COST,
-  NPC_ACTIVATE_COST,
-  TOILET_PRINT_COST,
+  toiletPrintCost,
+  npcRoleChangeCost,
+  npcActivateCost,
   fetchCollectedDatapoints,
   getSpentDatapoints,
   addSpentDatapoints,
@@ -17,12 +18,20 @@ import {
   markMonitorDebugged,
   getActivatedNpcIds,
   npcActivateQuota,
-} from "./datapoints.js?v=20260815ei";
+  applyShipStateSnapshot,
+  pullShipState,
+  enableShipStateCloud,
+  flushShipStateSave,
+  engineRodCost,
+  treeGrowCost,
+  claimLocalGardenHarvest,
+  activeCrewWorkCount,
+} from "./datapoints.js?v=20260817am";
 import { ShipScenes, SCENE } from "./scenes.js";
-import { createScene1Intro, applyCockpitShake } from "./scene1-intro.js?v=20260815ee";
-import { shipVoice } from "./ai-voice.js?v=20260815ez";
+import { createScene1Intro, applyCockpitShake } from "./scene1-intro.js?v=20260816u";
+import { shipVoice } from "./ai-voice.js?v=20260816w";
 import { createAiDrone } from "./ai-drone.js";
-import { ShipAmbience, ProximityTransformerHum, InfoHubHoloHiss, SleeperLevitateHum, HubHaloHum, playDoorOpen, playDoorClose, playDoorAuth, playCyberSuccess, playPodToggle, playHoloHover, playElectricShock, playDigitalGlitch, playHullRumble, playGlassDenied, playCeilingSpark, playMonitorSpark, resumeAudio, playYearReveal, playYearCollapse, playYearHover, playYearPick, playEnterShip } from "../sfx/index.js?v=20260815ey";
+import { ShipAmbience, ProximityTransformerHum, InfoHubHoloHiss, SleeperLevitateHum, HubHaloHum, playDoorOpen, playDoorClose, playDoorAuth, playCyberSuccess, playPodToggle, playHoloHover, playElectricShock, playDigitalGlitch, playHullRumble, playGlassDenied, playCeilingSpark, playMonitorSpark, resumeAudio, playYearReveal, playYearCollapse, playYearHover, playYearPick, playEnterShip, playTreeTeleport, getMixerLevels, setMixerLevels } from "../sfx/index.js?v=20260817al";
 
 const loaderEl = document.getElementById("loader");
 const loadBar = document.getElementById("load-bar");
@@ -34,9 +43,13 @@ const promptEl = document.getElementById("prompt");
 const yearFlashEl = document.getElementById("year-flash");
 const startBtn = document.getElementById("start-btn");
 const enterNote = document.getElementById("enter-note");
+const googleEnter = document.getElementById("google-enter");
 const enterVeil = document.getElementById("enter-veil");
 const helpBtn = document.getElementById("help-btn");
-const displayOpt = document.getElementById("display-opt");
+const topMenu = document.getElementById("top-menu");
+const gotoOpt = document.getElementById("goto-opt");
+const settingsOpt = document.getElementById("settings-opt");
+const roomOptList = document.getElementById("room-opt-list");
 const mobileRoot = document.getElementById("mobile-controls");
 const touchMode = isTouchDevice();
 
@@ -102,9 +115,28 @@ function navigateAfterLeavingFullscreen(href) {
 }
 
 function syncDisplayOptLabel() {
-  if (!displayOpt) return;
-  displayOpt.textContent = isAppFullscreen() ? "Window" : "Fullscreen";
+  const sel = document.getElementById("settings-display");
+  if (sel) sel.value = isAppFullscreen() ? "fullscreen" : "windowed";
 }
+
+function hideTopMenu() {
+  topMenu?.classList.add("hidden");
+  helpBtn?.classList.remove("is-open");
+  topMenuChanged?.(false);
+}
+
+function showTopMenu() {
+  syncDisplayOptLabel();
+  topMenu?.classList.remove("hidden");
+  helpBtn?.classList.add("is-open");
+  topMenuChanged?.(true);
+}
+
+function isTopMenuOpen() {
+  return !!(topMenu && !topMenu.classList.contains("hidden"));
+}
+
+let topMenuChanged = null;
 
 function setProgress(pct, status) {
   const p = Math.max(0, Math.min(100, Math.round(pct)));
@@ -190,14 +222,30 @@ async function boot() {
   await wait(30);
 
   setProgress(42, "Loading…");
-  try {
-    await document.fonts.load('400 200px "DinerScript"');
-    await document.fonts.load('600 64px "Sora"');
-    await document.fonts.load('400 48px "IBM Plex Sans"');
-    await document.fonts.ready;
-  } catch (_) {
-    /* canvas falls back if local face fails */
+  let signedInUser = null;
+  let remoteShipExists = false;
+  let pendingHarvestLine = null;
+  const fontsP = (async () => {
+    try {
+      await document.fonts.load('400 200px "DinerScript"');
+      await document.fonts.load('600 64px "Sora"');
+      await document.fonts.load('400 48px "IBM Plex Sans"');
+      await document.fonts.ready;
+    } catch (_) {
+      /* canvas falls back if local face fails */
+    }
+  })();
+  signedInUser = null;
+  {
+    const local = claimLocalGardenHarvest();
+    if (local.gained > 0) {
+      pendingHarvestLine =
+        local.gained === 1
+          ? "Harvested 1 data point from the garden."
+          : "Harvested " + local.gained + " data points from the garden.";
+    }
   }
+  await fontsP;
 
   setProgress(48, "Loading…");
   const ship = buildShip(scene);
@@ -278,8 +326,9 @@ async function boot() {
   setProgress(100, "Ready");
   await wait(120);
 
+  let wasInGarden = false;
   if (enterNote) {
-    enterNote.textContent = "Collect data points to help rebuild the ship.";
+    enterNote.textContent = "You start with 1000 data points to rebuild the ship.";
   }
   if (startBtn) startBtn.textContent = "Enter Ship";
 
@@ -313,6 +362,41 @@ async function boot() {
       if (x >= b.minX && x <= b.maxX && z >= b.minZ && z <= b.maxZ) return zones[i];
     }
     return null;
+  }
+
+  const hudRoomNameEl = document.getElementById("hud-room-name");
+  let lastHudRoom = "\0";
+  let hudRoomFadeTok = 0;
+  function hudRoomTitle(label) {
+    const id = gotoIdForZoneLabel(label);
+    const spec = GOTO_ROOMS.find((s) => s.id === id);
+    if (spec) return spec.name;
+    const L = String(label || "");
+    if (/crew deck/i.test(L)) return "Crew Deck";
+    if (/engineering access/i.test(L)) return "Engine Access";
+    if (/corridor/i.test(L)) return "Corridor";
+    return L;
+  }
+  function syncHudRoomName() {
+    if (!hudRoomNameEl) return;
+    const title = isTopMenuOpen() ? "" : hudRoomTitle(roomAtPlayer()?.label);
+    if (title === lastHudRoom) return;
+    const tok = ++hudRoomFadeTok;
+    lastHudRoom = title;
+    const finishIn = () => {
+      if (tok !== hudRoomFadeTok) return;
+      hudRoomNameEl.textContent = title;
+      requestAnimationFrame(() => {
+        if (tok !== hudRoomFadeTok) return;
+        hudRoomNameEl.classList.remove("is-fading");
+      });
+    };
+    if (!hudRoomNameEl.textContent) {
+      finishIn();
+      return;
+    }
+    hudRoomNameEl.classList.add("is-fading");
+    window.setTimeout(finishIn, 220);
   }
 
   function startScene1Briefing() {
@@ -420,6 +504,12 @@ async function boot() {
   /** @type {object | null} */
   let hoveredDebugMonitor = null;
   let hoveredToiletPrint = false;
+  let hoveredGrowTree = false;
+  let hoveredKitchen = null;
+  let hoveredDinerRoster = false;
+  /** @type {object | null} */
+  let hoveredEngineRod = null;
+  let rodSparkWait = 0.35;
   /** @type {object | null} */
   let hoveredBed = null;
   /** @type {{ wm: object, t: number, dur: number, bar: object, barMat: object, fullW: number } | null} */
@@ -438,7 +528,19 @@ async function boot() {
 
   /** Crosshair centre (desktop) or tap point (mobile) → year pick + flash transit. */
   let yearTransit = null;
-  function tryOpenYearByAim(clientX, clientY) {
+  let guidedWalk = null;
+  let pendingHubDebugGuide = false;
+
+  function cancelGuidedWalk() {
+    if (!guidedWalk) return;
+    player.position.y = player.eye;
+    player._applyCamera();
+    guidedWalk = null;
+    applyInputFreeze();
+  }
+
+  function tryOpenYearByAim(_clientX, _clientY) {
+    return false;
     const hub = ship.hubBeacon;
     if (!hub?.pickYearByRay || !player.locked) return false;
     if (yearTransit || hub.getPickedYear?.()) return true;
@@ -457,6 +559,7 @@ async function boot() {
     if (!hit?.href) return false;
     if (!hub.beginYearPick?.(hit)) return true;
     playYearPick();
+    cancelGuidedWalk();
     // Freeze look/move for the transit. Exit fullscreen only at navigate —
     // early exit on mobile portrait resizes the viewport and yanks the camera.
     player.inputFrozen = true;
@@ -483,6 +586,15 @@ async function boot() {
   }
 
   // Back/forward (bfcache) restores black flash + locked year pick — clear both.
+  const flushCloudShip = () => {
+    if (!signedInUser) return;
+    void flushShipStateSave({ keepalive: true });
+  };
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushCloudShip();
+  });
+  window.addEventListener("pagehide", flushCloudShip);
+
   window.addEventListener("pageshow", () => {
     yearFlashEl?.classList.remove("on");
     yearTransit = null;
@@ -527,7 +639,13 @@ async function boot() {
       document.getElementById("reset-confirm") ||
       document.getElementById("debug-confirm") ||
       document.getElementById("npc-confirm") ||
-      document.getElementById("toilet-print-confirm")
+      document.getElementById("toilet-print-confirm") ||
+      document.getElementById("grow-tree-confirm") ||
+      document.getElementById("rod-confirm") ||
+      document.getElementById("crew-role-confirm") ||
+      document.getElementById("room-brief-confirm") ||
+      document.getElementById("settings-confirm") ||
+      document.getElementById("goto-confirm")
     );
   }
 
@@ -576,17 +694,29 @@ async function boot() {
     closeShipDialog("toilet-print-confirm");
   }
 
+  function closeGrowTreeConfirm() {
+    closeShipDialog("grow-tree-confirm");
+  }
+
+  function closeRodConfirm() {
+    closeShipDialog("rod-confirm");
+  }
+
   function tryPrintToilet() {
     if (anyShipDialogOpen()) return false;
-    if (!ship.anim?.toiletPrint?.holo?.visible) return false;
+    if (isWorkRoomSos("washroom", ship.anim)) {
+      alertDebugRoom("Debug the washroom first.", "washroom");
+      return true;
+    }
     if (toiletSlotsLeft(ship.anim) <= 0) {
       playGlassDenied();
       shipVoice.trySpeak("Every extra stall already has a toilet.");
       return true;
     }
+    const printCost = toiletPrintCost();
     const used = getSpentDatapoints();
     const avail = availableDatapoints(collectedDatapoints, used);
-    if (avail < TOILET_PRINT_COST) {
+    if (avail < printCost) {
       playGlassDenied();
       shipVoice.trySpeak(pickInsufficientLine());
       return true;
@@ -607,10 +737,11 @@ async function boot() {
     const wrap = document.createElement("div");
     wrap.id = "toilet-print-confirm";
     wrap.className = "ship-confirm";
+    const printCost = toiletPrintCost();
     wrap.innerHTML =
       '<div class="ship-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="toilet-print-title">' +
       '<p id="toilet-print-title">Print a toilet for <strong>' +
-      TOILET_PRINT_COST +
+      printCost +
       " data points</strong>? Each extra toilet adds <strong>+2 crew capacity</strong>.</p>" +
       '<div class="ship-confirm-actions">' +
       '<button type="button" class="ship-confirm-yes" id="toilet-print-yes">Yes</button>' +
@@ -633,13 +764,14 @@ async function boot() {
       closeToiletPrintConfirm();
       const used = getSpentDatapoints();
       const avail = availableDatapoints(collectedDatapoints, used);
-      if (avail < TOILET_PRINT_COST) {
+      const printCost = toiletPrintCost();
+      if (avail < printCost) {
         playGlassDenied();
         shipVoice.trySpeak(pickInsufficientLine());
       } else if (printToiletInWashroom(ship.anim)) {
-        addSpentDatapoints(TOILET_PRINT_COST);
+        addSpentDatapoints(printCost);
         syncConsoleDatapoints();
-        playCyberSuccess();
+        playTreeTeleport();
         shipVoice.trySpeak("Toilet printed. Two more berths are open.");
       }
       if (!touchMode) {
@@ -654,7 +786,8 @@ async function boot() {
   }
 
   function pickToiletPrint(clientX, clientY) {
-    const holo = ship.anim?.toiletPrint?.holo;
+    const print = ship.anim?.toiletPrint;
+    const holo = print?.holo;
     if (!holo?.visible) return null;
     if (clientX == null || clientY == null) {
       unlockNdc.set(0, 0);
@@ -666,10 +799,12 @@ async function boot() {
       );
     }
     unlockRaycaster.setFromCamera(unlockNdc, camera);
-    unlockRaycaster.far = 4.6;
-    const hits = unlockRaycaster.intersectObject(holo, false);
+    unlockRaycaster.far = 4.8;
+    const targets = [holo];
+    if (print.hit) targets.push(print.hit);
+    const hits = unlockRaycaster.intersectObjects(targets, false);
     unlockRaycaster.far = Infinity;
-    if (!hits.length || hits[0].distance > 4.6) return null;
+    if (!hits.length || hits[0].distance > 4.8) return null;
     return holo;
   }
 
@@ -689,6 +824,489 @@ async function boot() {
       h.material.opacity = h.userData.baseOpacity ?? 0.62;
     }
     h.material.needsUpdate = true;
+  }
+
+  function pickGrowTree(clientX, clientY) {
+    const gt = ship.anim?.growTree;
+    if (!gt?.pot?.visible && !gt?.holo?.visible) return null;
+    if (clientX == null || clientY == null) {
+      unlockNdc.set(0, 0);
+    } else {
+      const rect = renderer.domElement.getBoundingClientRect();
+      unlockNdc.set(
+        ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
+        -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1
+      );
+    }
+    unlockRaycaster.setFromCamera(unlockNdc, camera);
+    unlockRaycaster.far = 4.8;
+    const targets = [];
+    if (gt.holo) targets.push(gt.holo);
+    if (gt.hit) {
+      gt.hit.visible = true;
+      targets.push(gt.hit);
+    }
+    if (gt.pot) targets.push(gt.pot);
+    const hits = unlockRaycaster.intersectObjects(targets, true);
+    unlockRaycaster.far = Infinity;
+    if (!hits.length || hits[0].distance > 4.8) return null;
+    return gt.holo;
+  }
+
+  function setGrowTreeHover(on) {
+    const gt = ship.anim?.growTree;
+    const h = gt?.holo;
+    const body = gt?.pot?.userData?.bodyMat;
+    if (!h?.material && !body) {
+      hoveredGrowTree = false;
+      return;
+    }
+    if (on && !hoveredGrowTree) playHoloHover();
+    hoveredGrowTree = !!on;
+    if (h?.material) {
+      if (on) {
+        if (h.userData.hoverMap) h.material.map = h.userData.hoverMap;
+        h.material.opacity = h.userData.hoverOpacity ?? 1;
+      } else {
+        if (h.userData.baseMap) h.material.map = h.userData.baseMap;
+        h.material.opacity = h.userData.baseOpacity ?? 0.62;
+      }
+      h.material.needsUpdate = true;
+    }
+    if (body) {
+      body.emissiveIntensity = on ? 0.42 : 0.18;
+    }
+  }
+
+  function pickKitchenMachine(clientX, clientY) {
+    const diner = ship.anim?.diner;
+    const targets = [];
+    if (diner?.stove?.userData?.hit) targets.push(diner.stove.userData.hit);
+    if (diner?.washer?.userData?.hit) targets.push(diner.washer.userData.hit);
+    if (!targets.length) return null;
+    if (clientX == null || clientY == null) {
+      unlockNdc.set(0, 0);
+    } else {
+      const rect = renderer.domElement.getBoundingClientRect();
+      unlockNdc.set(
+        ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
+        -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1
+      );
+    }
+    unlockRaycaster.setFromCamera(unlockNdc, camera);
+    unlockRaycaster.far = 4.4;
+    const hits = unlockRaycaster.intersectObjects(targets, false);
+    unlockRaycaster.far = Infinity;
+    if (!hits.length || hits[0].distance > 4.4) return null;
+    return hits[0].object.userData.kitchenMachine || null;
+  }
+
+  function tryToggleKitchenMachine(kind) {
+    if (anyShipDialogOpen() || !kind) return false;
+    const diner = ship.anim?.diner;
+    if (kind === "stove") {
+      diner?.stove?.userData?.toggle?.();
+      return true;
+    }
+    if (kind === "washer") {
+      diner?.washer?.userData?.toggle?.();
+      return true;
+    }
+    return false;
+  }
+
+  function pickDinerRoster(clientX, clientY) {
+    const hit = ship.anim?.diner?.rosterHit;
+    if (!hit) return false;
+    if (clientX == null || clientY == null) {
+      unlockNdc.set(0, 0);
+    } else {
+      const rect = renderer.domElement.getBoundingClientRect();
+      unlockNdc.set(
+        ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
+        -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1
+      );
+    }
+    unlockRaycaster.setFromCamera(unlockNdc, camera);
+    unlockRaycaster.far = 4.6;
+    const hits = unlockRaycaster.intersectObject(hit, false);
+    unlockRaycaster.far = Infinity;
+    return !!(hits.length && hits[0].distance <= 4.6);
+  }
+
+  function setDinerRosterHover(on) {
+    const paper = ship.anim?.diner?.rosterPaper;
+    if (on && !hoveredDinerRoster) playHoloHover();
+    hoveredDinerRoster = !!on;
+    if (paper?.material) {
+      paper.material.color.setHex(on ? 0xc8eeff : 0xffffff);
+    }
+  }
+
+  function tryOpenDinerRoster() {
+    if (anyShipDialogOpen() || guidedWalk) return false;
+    if (isWorkRoomSos("diner", ship.anim)) {
+      alertDebugRoom("Debug the diner first.", "diner");
+      return true;
+    }
+    showCrewRoleDialog();
+    return true;
+  }
+
+  function tryGrowTree() {
+    if (anyShipDialogOpen()) return false;
+    if (isWorkRoomSos("garden", ship.anim)) {
+      alertDebugRoom("Debug the garden first.", "garden");
+      return true;
+    }
+    if (treeSlotsLeft(ship.anim) <= 0) {
+      playGlassDenied();
+      shipVoice.trySpeak("Every garden bed already has a data tree.");
+      return true;
+    }
+    const used = getSpentDatapoints();
+    const avail = availableDatapoints(collectedDatapoints, used);
+    const growCost = treeGrowCost();
+    if (avail < growCost) {
+      playGlassDenied();
+      shipVoice.trySpeak(pickInsufficientLine());
+      return true;
+    }
+    showGrowTreeConfirm();
+    return true;
+  }
+
+  function showGrowTreeConfirm() {
+    closeUnlockConfirm();
+    closeResetConfirm();
+    closeDebugConfirm();
+    closeNpcConfirm();
+    closeToiletPrintConfirm();
+    closeGrowTreeConfirm();
+    closeRodConfirm();
+    setGrowTreeHover(false);
+    try {
+      if (document.pointerLockElement) document.exitPointerLock();
+    } catch (_) {}
+    const wrap = document.createElement("div");
+    wrap.id = "grow-tree-confirm";
+    wrap.className = "ship-confirm";
+    wrap.style.pointerEvents = "none";
+    wrap.innerHTML =
+      '<div class="ship-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="grow-tree-title">' +
+      '<p id="grow-tree-title">Grow a data tree for <strong>' +
+      treeGrowCost() +
+      " data points</strong>?</p>" +
+      '<div class="ship-confirm-actions">' +
+      '<button type="button" class="ship-confirm-yes" id="grow-tree-yes">Yes</button>' +
+      '<button type="button" class="ship-confirm-no" id="grow-tree-no">No</button>' +
+      "</div></div>";
+    const armMs = touchMode ? 480 : 0;
+    const armedAt = performance.now() + armMs;
+    wrap.addEventListener("click", (e) => {
+      if (performance.now() < armedAt) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      if (e.target === wrap) closeGrowTreeConfirm();
+    });
+    document.body.appendChild(wrap);
+    syncConfirmCursor();
+    const finishNo = () => {
+      closeGrowTreeConfirm();
+      if (!touchMode) {
+        try {
+          renderer.domElement.requestPointerLock();
+        } catch (_) {}
+      }
+    };
+    const finishYes = () => {
+      closeGrowTreeConfirm();
+      const used = getSpentDatapoints();
+      const avail = availableDatapoints(collectedDatapoints, used);
+      const growCost = treeGrowCost();
+      if (avail < growCost) {
+        playGlassDenied();
+        shipVoice.trySpeak(pickInsufficientLine());
+      } else {
+        const slot = growDataTree(ship.anim);
+        if (slot) {
+          addSpentDatapoints(growCost);
+          syncConsoleDatapoints();
+          const fx = createTreeTeleportFx(ship.anim, slot);
+          playTreeTeleport();
+          if (fx) {
+            fx.onDone = () => {
+              const left = treeSlotsLeft(ship.anim);
+              shipVoice.trySpeak(
+                left <= 0
+                  ? "Garden beds are full. The data trees are holding."
+                  : "Data tree planted."
+              );
+            };
+          }
+        }
+      }
+      if (!touchMode) {
+        try {
+          renderer.domElement.requestPointerLock();
+        } catch (_) {}
+      }
+    };
+    const noBtn = document.getElementById("grow-tree-no");
+    const yesBtn = document.getElementById("grow-tree-yes");
+    let answered = false;
+    const onNo = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (performance.now() < armedAt || answered) return;
+      answered = true;
+      finishNo();
+    };
+    const onYes = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (performance.now() < armedAt || answered) return;
+      answered = true;
+      finishYes();
+    };
+    noBtn?.addEventListener("pointerup", onNo);
+    yesBtn?.addEventListener("pointerup", onYes);
+    noBtn?.addEventListener("click", onNo);
+    yesBtn?.addEventListener("click", onYes);
+    setTimeout(() => {
+      if (wrap.isConnected) wrap.style.pointerEvents = "auto";
+    }, armMs || 0);
+    try {
+      yesBtn?.focus();
+    } catch (_) {}
+  }
+
+  function tryRepairEngineRod(rod) {
+    if (!rod || rod.repaired) return false;
+    if (anyShipDialogOpen()) return false;
+    if (isWorkRoomSos("engine", ship.anim)) {
+      alertDebugRoom("Debug the engine room first.", "engine");
+      return true;
+    }
+    const used = getSpentDatapoints();
+    const avail = availableDatapoints(collectedDatapoints, used);
+    const cost = engineRodCost(rod);
+    if (avail < cost) {
+      playGlassDenied();
+      shipVoice.trySpeak(pickInsufficientLine());
+      return true;
+    }
+    showRodConfirm(rod);
+    return true;
+  }
+
+  function showRodConfirm(rod) {
+    if (!rod || rod.repaired) return;
+    closeUnlockConfirm();
+    closeResetConfirm();
+    closeDebugConfirm();
+    closeNpcConfirm();
+    closeToiletPrintConfirm();
+    closeRodConfirm();
+    setEngineRodHover(null);
+    try {
+      if (document.pointerLockElement) document.exitPointerLock();
+    } catch (_) {}
+    const wrap = document.createElement("div");
+    wrap.id = "rod-confirm";
+    wrap.className = "ship-confirm";
+    wrap.style.pointerEvents = "none";
+    wrap.innerHTML =
+      '<div class="ship-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="rod-confirm-title">' +
+      '<p id="rod-confirm-title">Repair for <strong>' +
+      engineRodCost(rod) +
+      " data points</strong>?</p>" +
+      '<div class="ship-confirm-actions">' +
+      '<button type="button" class="ship-confirm-yes" id="rod-confirm-yes">Yes</button>' +
+      '<button type="button" class="ship-confirm-no" id="rod-confirm-no">No</button>' +
+      "</div></div>";
+    const armMs = touchMode ? 480 : 0;
+    const armedAt = performance.now() + armMs;
+    wrap.addEventListener("click", (e) => {
+      if (performance.now() < armedAt) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      if (e.target === wrap) closeRodConfirm();
+    });
+    document.body.appendChild(wrap);
+    syncConfirmCursor();
+    const finishNo = () => {
+      closeRodConfirm();
+      if (!touchMode) {
+        try {
+          renderer.domElement.requestPointerLock();
+        } catch (_) {}
+      }
+    };
+    const finishYes = () => {
+      closeRodConfirm();
+      const used = getSpentDatapoints();
+      const avail = availableDatapoints(collectedDatapoints, used);
+      if (avail < engineRodCost(rod)) {
+        playGlassDenied();
+        shipVoice.trySpeak(pickInsufficientLine());
+      } else if (repairEngineRod(rod)) {
+        addSpentDatapoints(engineRodCost(rod));
+        playDoorAuth();
+        syncConsoleDatapoints();
+        const left = engineRodsLeft(ship.anim);
+        if (left <= 0) {
+          playCyberSuccess();
+          shipVoice.trySpeak("All five engines are nominal. Core is holding.");
+        } else {
+          shipVoice.trySpeak("Engine restored. Output stabilizing.");
+        }
+      }
+      if (!touchMode) {
+        try {
+          renderer.domElement.requestPointerLock();
+        } catch (_) {}
+      }
+    };
+    const noBtn = document.getElementById("rod-confirm-no");
+    const yesBtn = document.getElementById("rod-confirm-yes");
+    let answered = false;
+    const onNo = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (performance.now() < armedAt || answered) return;
+      answered = true;
+      finishNo();
+    };
+    const onYes = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (performance.now() < armedAt || answered) return;
+      answered = true;
+      finishYes();
+    };
+    noBtn?.addEventListener("pointerup", onNo);
+    yesBtn?.addEventListener("pointerup", onYes);
+    noBtn?.addEventListener("click", onNo);
+    yesBtn?.addEventListener("click", onYes);
+    setTimeout(() => {
+      if (wrap.isConnected) wrap.style.pointerEvents = "auto";
+    }, armMs || 0);
+    try {
+      yesBtn?.focus();
+    } catch (_) {}
+  }
+
+  function pickEngineRod(clientX, clientY) {
+    const rods = (ship.anim?.engineRods || []).filter((r) => !r.repaired && r.hitPlane);
+    if (!rods.length) return null;
+    if (clientX == null || clientY == null) {
+      unlockNdc.set(0, 0);
+    } else {
+      const rect = renderer.domElement.getBoundingClientRect();
+      unlockNdc.set(
+        ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
+        -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1
+      );
+    }
+    unlockRaycaster.setFromCamera(unlockNdc, camera);
+    const far = touchMode ? 7.2 : 6.4;
+    unlockRaycaster.far = far;
+    const targets = [];
+    for (const r of rods) {
+      r.hitPlane.visible = true;
+      targets.push(r.hitPlane);
+      if (r.repairHolo) targets.push(r.repairHolo);
+    }
+    const hits = unlockRaycaster.intersectObjects(targets, false);
+    unlockRaycaster.far = Infinity;
+    if (!hits.length || hits[0].distance > far) return null;
+    let o = hits[0].object;
+    while (o) {
+      const id = o.userData?.rodId;
+      if (id) return rods.find((r) => r.id === id) || null;
+      o = o.parent;
+    }
+    return null;
+  }
+
+  function setEngineRodHover(rod) {
+    if (anyShipDialogOpen()) return;
+    if (hoveredEngineRod && hoveredEngineRod !== rod) {
+      const h = hoveredEngineRod.repairHolo;
+      hoveredEngineRod._aimHover = false;
+      if (h?.material) {
+        if (h.userData.baseMap) h.material.map = h.userData.baseMap;
+        h.material.opacity = h.userData.baseOpacity ?? 0.58;
+        h.scale.set(1, 1, 1);
+        h.material.needsUpdate = true;
+      }
+    }
+    if (rod && rod !== hoveredEngineRod) playHoloHover();
+    hoveredEngineRod = rod || null;
+    if (rod?.repairHolo?.material) {
+      const h = rod.repairHolo;
+      rod._aimHover = true;
+      h.visible = true;
+      if (h.userData.hoverMap) h.material.map = h.userData.hoverMap;
+      h.material.opacity = 1;
+      h.scale.set(1.12, 1.12, 1.12);
+      h.material.needsUpdate = true;
+    }
+  }
+
+  function updateEngineRodAimHover() {
+    if (anyShipDialogOpen() || yearTransit || !player.locked) {
+      setEngineRodHover(null);
+      return;
+    }
+    if (touchMode || document.pointerLockElement === renderer.domElement) {
+      setEngineRodHover(pickEngineRod(null, null));
+    }
+  }
+
+  function updateEngineRodSparks(dt) {
+    const rods = (ship.anim?.engineRods || []).filter((r) => !r.repaired && r.core);
+    if (!rods.length || !player.locked || yearTransit) return;
+    rodSparkWait -= dt;
+    if (rodSparkWait > 0) return;
+    rodSparkWait = mobileQuality ? 0.5 + Math.random() * 0.85 : 0.22 + Math.random() * 0.5;
+    const rod = rods[(Math.random() * rods.length) | 0];
+    rod.core.getWorldPosition(holoWorldPos);
+    const dist = Math.hypot(
+      holoWorldPos.x - player.position.x,
+      holoWorldPos.z - player.position.z
+    );
+    if (dist > 13) return;
+    const sc = rod.scale || 1;
+    const ang = Math.random() * Math.PI * 2;
+    // Outside the metal cage / pipe — old radius sat inside the glowing core
+    const rr = (0.92 + Math.random() * 0.16) * sc;
+    const up = (Math.random() * 1.6 - 0.2) * sc;
+    const nx = Math.cos(ang);
+    const nz = Math.sin(ang);
+    burstSparksAt(
+      sosSparks,
+      holoWorldPos.x + nx * rr,
+      holoWorldPos.y + up,
+      holoWorldPos.z + nz * rr,
+      {
+        nx,
+        ny: 0.2 + Math.random() * 0.35,
+        nz,
+        scale: 0.78 + (sc > 1.2 ? 0.22 : 0),
+        rays: 4,
+        embers: 6,
+      }
+    );
+    if (dist < 11) {
+      const g = 1 - Math.min(0.7, dist / 14);
+      playMonitorSpark(g);
+    }
   }
 
   function showUnlockConfirm(door) {
@@ -789,9 +1407,15 @@ async function boot() {
     closeDebugConfirm();
     closeNpcConfirm();
     closeToiletPrintConfirm();
+    closeGrowTreeConfirm();
+    closeRodConfirm();
     hoveredUnlockDoor = null;
     hoveredDebugMonitor = null;
     hoveredToiletPrint = false;
+    hoveredGrowTree = false;
+    hoveredKitchen = null;
+    setDinerRosterHover(false);
+    hoveredEngineRod = null;
     hoveredDeskOption = null;
     lockedDoorKey = null;
     lockedDoorLine = null;
@@ -799,11 +1423,13 @@ async function boot() {
     ship.mainScreen.userData.introPlaying = false;
     // Ship usage only — collected exercise datapoints stay on the server / scores API
     clearShipDatapointUsage();
+    void flushShipStateSave();
     clearShipBriefingProgress();
     relockAllShipDoors(ship.autoDoors);
     resetAllRoomSos(ship.anim);
     resetSleepingCrew(ship.anim, ship.root);
     resetPrintedToilets(ship.anim);
+    resetGrownTrees(ship.anim);
     const ud = ship.mainScreen.userData;
     ud.statusView?.reset?.();
     setMainScreenMode(ship, "default");
@@ -1008,7 +1634,13 @@ async function boot() {
   function unlockHoloMeshes() {
     const out = [];
     for (const d of ship.autoDoors || []) {
-      if (d?.locked && d.unlockHolo?.visible) out.push(d.unlockHolo);
+      if (!d?.locked) continue;
+      if (d.unlockHit) {
+        d.unlockHit.visible = true;
+        out.push(d.unlockHit);
+      }
+      if (d.doorMesh) out.push(d.doorMesh);
+      if (d.unlockHolo) out.push(d.unlockHolo);
     }
     return out;
   }
@@ -1016,17 +1648,21 @@ async function boot() {
   function doorFromUnlockHit(obj) {
     let o = obj;
     while (o) {
-      if (o.userData?.unlockHolo || o.userData?.doorKey) {
-        const key = o.userData.doorKey;
-        if (key) {
-          return (ship.autoDoors || []).find((d) => d.key === key) || null;
-        }
+      const key = o.userData?.doorKey;
+      if (key) {
+        return (ship.autoDoors || []).find((d) => d.key === key) || null;
       }
       o = o.parent;
     }
-    // Fallback: match mesh reference
     for (const d of ship.autoDoors || []) {
-      if (d.unlockHolo === obj || d.unlockHolo?.uuid === obj?.uuid) return d;
+      if (
+        d.unlockHolo === obj ||
+        d.unlockHit === obj ||
+        d.doorMesh === obj ||
+        d.unlockHolo?.uuid === obj?.uuid
+      ) {
+        return d;
+      }
     }
     return null;
   }
@@ -1042,14 +1678,16 @@ async function boot() {
       );
     }
     unlockRaycaster.setFromCamera(unlockNdc, camera);
-    unlockRaycaster.far = 4.2;
+    const far = touchMode ? 6.4 : 5.8;
+    unlockRaycaster.far = far;
     const meshes = unlockHoloMeshes();
-    if (!meshes.length) return null;
+    if (!meshes.length) {
+      unlockRaycaster.far = Infinity;
+      return null;
+    }
     const hits = unlockRaycaster.intersectObjects(meshes, false);
     unlockRaycaster.far = Infinity;
-    if (!hits.length) return null;
-    // Must actually hit the unlock plane (crosshair / finger on the text)
-    if (hits[0].distance > 4.2) return null;
+    if (!hits.length || hits[0].distance > far) return null;
     return doorFromUnlockHit(hits[0].object);
   }
 
@@ -1172,6 +1810,7 @@ async function boot() {
     closeUnlockConfirm();
     closeResetConfirm();
     closeDebugConfirm();
+    closeRodConfirm();
     setDebugMonitorHover(null);
     setUnlockHover(null);
     try {
@@ -1353,6 +1992,7 @@ async function boot() {
     if (result.roomCleared) {
       playCyberSuccess();
       shipVoice.trySpeak(pickRoomRestoredLine(result.roomName));
+      showRoomBriefPopup(result.roomName, wm);
     } else {
       shipVoice.trySpeak("Monitor debug accepted. Panel restored to nominal.");
     }
@@ -1372,6 +2012,467 @@ async function boot() {
     }
     if (fx.wm) fx.wm.repairing = false;
     debugTweenFx = null;
+  }
+
+  function restoredMonitorEligible(wm) {
+    if (!wm || wm.repairing) return false;
+    return wm.room?.userData?.lightMode !== "sos";
+  }
+
+  function pickRestoredMonitor(clientX, clientY) {
+    if (clientX == null || clientY == null) {
+      unlockNdc.set(0, 0);
+    } else {
+      const rect = renderer.domElement.getBoundingClientRect();
+      unlockNdc.set(
+        ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
+        -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1
+      );
+    }
+    unlockRaycaster.setFromCamera(unlockNdc, camera);
+    const far = touchMode ? 7.4 : 6.4;
+    unlockRaycaster.far = far;
+    const targets = [];
+    for (const wm of ship.anim?.wallMonitors || []) {
+      if (!restoredMonitorEligible(wm)) continue;
+      if (wm.hitPlane) {
+        wm.hitPlane.visible = true;
+        targets.push(wm.hitPlane);
+      }
+      if (wm.screen) targets.push(wm.screen);
+      if (wm.briefPic?.visible) targets.push(wm.briefPic);
+    }
+    if (!targets.length) {
+      unlockRaycaster.far = Infinity;
+      return null;
+    }
+    const hits = unlockRaycaster.intersectObjects(targets, false);
+    unlockRaycaster.far = Infinity;
+    if (!hits.length || hits[0].distance > far) return null;
+    return monitorFromDebugHit(hits[0].object) ||
+      (ship.anim?.wallMonitors || []).find((m) => m.briefPic === hits[0].object) ||
+      null;
+  }
+
+  function closeCrewRoleConfirm() {
+    closeShipDialog("crew-role-confirm");
+  }
+
+  function closeRoomBriefConfirm() {
+    closeShipDialog("room-brief-confirm");
+  }
+
+  function closeSettingsConfirm() {
+    closeShipDialog("settings-confirm");
+  }
+
+  function closeGotoConfirm() {
+    closeShipDialog("goto-confirm");
+  }
+
+  function staffManualNameFromLabel(label) {
+    const id = gotoIdForZoneLabel(label);
+    return GOTO_ROOMS.find((s) => s.id === id)?.name || "Info Hub";
+  }
+
+  function relockPointerIfDesktop() {
+    if (!touchMode) {
+      try {
+        renderer.domElement.requestPointerLock();
+      } catch (_) {}
+    }
+  }
+
+  function showRoomBriefPopup(label, wm = null) {
+    closeUnlockConfirm();
+    closeResetConfirm();
+    closeDebugConfirm();
+    closeNpcConfirm();
+    closeToiletPrintConfirm();
+    closeGrowTreeConfirm();
+    closeRodConfirm();
+    closeCrewRoleConfirm();
+    closeRoomBriefConfirm();
+    closeSettingsConfirm();
+    closeGotoConfirm();
+    hideTopMenu();
+    try {
+      if (document.pointerLockElement) document.exitPointerLock();
+    } catch (_) {}
+    const roomName = staffManualNameFromLabel(label);
+    const wrap = document.createElement("div");
+    wrap.id = "room-brief-confirm";
+    wrap.className = "ship-confirm";
+    const opts = GOTO_ROOMS.map((spec) => {
+      const sel = spec.name === roomName ? " selected" : "";
+      return '<option value="' + spec.name + '"' + sel + ">" + spec.name + "</option>";
+    }).join("");
+    wrap.innerHTML =
+      '<div class="ship-confirm-dialog ship-brief-dialog" role="dialog" aria-modal="true">' +
+      '<p class="ship-brief-kicker ship-brief-title">' +
+      "<span>Staff Manual :</span>" +
+      '<select id="staff-manual-room" class="ship-brief-room-select" aria-label="Choose a room">' +
+      opts +
+      "</select></p>" +
+      '<img class="ship-brief-pic" id="staff-manual-pic" alt="" src="' +
+      briefImageSrc(roomName) +
+      '" />' +
+      '<div id="staff-manual-body">' +
+      pickRoomBriefHtml(roomName, ship.anim, ship.autoDoors) +
+      "</div>" +
+      '<div class="ship-confirm-actions">' +
+      '<button type="button" class="ship-confirm-no" id="room-brief-close">Close</button>' +
+      "</div></div>";
+    wrap.addEventListener("click", (e) => {
+      if (e.target === wrap) {
+        closeRoomBriefConfirm();
+        relockPointerIfDesktop();
+      }
+    });
+    document.body.appendChild(wrap);
+    syncConfirmCursor();
+    const applyBriefPicAspect = (name) => {
+      const pic = document.getElementById("staff-manual-pic");
+      if (!pic) return;
+      pic.style.aspectRatio = String(briefMonitorAspect(name, ship.anim));
+    };
+    applyBriefPicAspect(roomName);
+    document.getElementById("staff-manual-room")?.addEventListener("change", (e) => {
+      const name = e.target.value;
+      const pic = document.getElementById("staff-manual-pic");
+      const body = document.getElementById("staff-manual-body");
+      if (pic) pic.src = briefImageSrc(name);
+      applyBriefPicAspect(name);
+      if (body) body.innerHTML = pickRoomBriefHtml(name, ship.anim, ship.autoDoors);
+    });
+    document.getElementById("room-brief-close")?.addEventListener("click", () => {
+      closeRoomBriefConfirm();
+      relockPointerIfDesktop();
+    });
+    try {
+      document.getElementById("room-brief-close")?.focus();
+    } catch (_) {}
+  }
+
+  function showSettingsPopup() {
+    closeUnlockConfirm();
+    closeResetConfirm();
+    closeDebugConfirm();
+    closeNpcConfirm();
+    closeToiletPrintConfirm();
+    closeGrowTreeConfirm();
+    closeRodConfirm();
+    closeCrewRoleConfirm();
+    closeRoomBriefConfirm();
+    closeSettingsConfirm();
+    closeGotoConfirm();
+    hideTopMenu();
+    try {
+      if (document.pointerLockElement) document.exitPointerLock();
+    } catch (_) {}
+    const vol = getMixerLevels();
+    const pct = (gain) => String(Math.round((Number(gain) || 0) * 50));
+    const wrap = document.createElement("div");
+    wrap.id = "settings-confirm";
+    wrap.className = "ship-confirm";
+    wrap.innerHTML =
+      '<div class="ship-confirm-dialog ship-brief-dialog" role="dialog" aria-modal="true">' +
+      "<p><strong>Settings</strong></p>" +
+      '<div class="ship-role-row"><span>Display</span>' +
+      '<select id="settings-display" aria-label="Display">' +
+      '<option value="windowed">Windowed</option>' +
+      '<option value="fullscreen">Fullscreen</option>' +
+      "</select></div>" +
+      '<label class="ship-vol-row"><span>Master</span><input type="range" id="vol-master" min="0" max="100" value="' +
+      pct(vol.master) +
+      '"></label>' +
+      '<label class="ship-vol-row"><span>SFX</span><input type="range" id="vol-sfx" min="0" max="100" value="' +
+      pct(vol.sfx) +
+      '"></label>' +
+      '<label class="ship-vol-row"><span>VO</span><input type="range" id="vol-vo" min="0" max="100" value="' +
+      pct(vol.vo) +
+      '"></label>' +
+      '<label class="ship-vol-row"><span>Ambience</span><input type="range" id="vol-ambience" min="0" max="100" value="' +
+      pct(vol.ambience) +
+      '"></label>' +
+      '<div class="ship-confirm-actions">' +
+      '<button type="button" class="ship-confirm-no" id="settings-close">Close</button>' +
+      "</div></div>";
+    wrap.addEventListener("click", (e) => {
+      if (e.target === wrap) {
+        closeSettingsConfirm();
+        relockPointerIfDesktop();
+      }
+    });
+    document.body.appendChild(wrap);
+    syncConfirmCursor();
+    syncDisplayOptLabel();
+    document.getElementById("settings-display")?.addEventListener("change", (e) => {
+      const mode = e.target.value;
+      if (mode === "fullscreen") requestAppFullscreen();
+      else exitAppFullscreen();
+      setTimeout(syncDisplayOptLabel, 120);
+    });
+    const bindVol = (id, key) => {
+      document.getElementById(id)?.addEventListener("input", (e) => {
+        const n = Number(e.target.value);
+        setMixerLevels({ [key]: n / 50 });
+      });
+    };
+    bindVol("vol-master", "master");
+    bindVol("vol-sfx", "sfx");
+    bindVol("vol-vo", "vo");
+    bindVol("vol-ambience", "ambience");
+    document.getElementById("settings-close")?.addEventListener("click", () => {
+      closeSettingsConfirm();
+      relockPointerIfDesktop();
+    });
+    try {
+      document.getElementById("settings-close")?.focus();
+    } catch (_) {}
+  }
+
+  function showGotoPopup() {
+    closeUnlockConfirm();
+    closeResetConfirm();
+    closeDebugConfirm();
+    closeNpcConfirm();
+    closeToiletPrintConfirm();
+    closeGrowTreeConfirm();
+    closeRodConfirm();
+    closeCrewRoleConfirm();
+    closeRoomBriefConfirm();
+    closeSettingsConfirm();
+    closeGotoConfirm();
+    hideTopMenu();
+    try {
+      if (document.pointerLockElement) document.exitPointerLock();
+    } catch (_) {}
+    const here = gotoIdForZoneLabel(roomAtPlayer()?.label);
+    const blocked = yearTransit || !briefingScriptDone() || cockpitExitStillBlocked();
+    let rows = "";
+    for (const spec of GOTO_ROOMS) {
+      const status = gotoRoomStatus(spec, ship.autoDoors, ship.anim, blocked);
+      const hereCls = spec.id === here ? " is-here" : "";
+      const label = status === "locked" ? "???" : spec.name;
+      const can = status !== "locked";
+      rows +=
+        '<button type="button" class="ship-goto-item is-' +
+        status +
+        hereCls +
+        '" data-goto="' +
+        spec.id +
+        '"' +
+        (can ? "" : " disabled") +
+        ">" +
+        label +
+        "</button>";
+    }
+    const wrap = document.createElement("div");
+    wrap.id = "goto-confirm";
+    wrap.className = "ship-confirm";
+    wrap.innerHTML =
+      '<div class="ship-confirm-dialog ship-goto-dialog" role="dialog" aria-modal="true">' +
+      '<p class="ship-brief-kicker">Go to</p>' +
+      '<div class="ship-goto-list">' +
+      rows +
+      "</div>" +
+      '<div class="ship-confirm-actions">' +
+      '<button type="button" class="ship-confirm-no" id="goto-close">Close</button>' +
+      "</div></div>";
+    wrap.addEventListener("click", (e) => {
+      if (e.target === wrap) {
+        closeGotoConfirm();
+        relockPointerIfDesktop();
+      }
+    });
+    document.body.appendChild(wrap);
+    syncConfirmCursor();
+    wrap.querySelectorAll("button.ship-goto-item").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const spec = GOTO_ROOMS.find((s) => s.id === btn.getAttribute("data-goto"));
+        if (!spec || btn.disabled) {
+          playGlassDenied();
+          return;
+        }
+        closeGotoConfirm();
+        startGuidedWalk(spec);
+      });
+    });
+    document.getElementById("goto-close")?.addEventListener("click", () => {
+      closeGotoConfirm();
+      relockPointerIfDesktop();
+    });
+    try {
+      wrap.querySelector("button.ship-goto-item:not(:disabled)")?.focus() ||
+        document.getElementById("goto-close")?.focus();
+    } catch (_) {}
+  }
+
+  function showCrewRoleDialog() {
+    closeUnlockConfirm();
+    closeResetConfirm();
+    closeDebugConfirm();
+    closeNpcConfirm();
+    closeCrewRoleConfirm();
+    closeGotoConfirm();
+    try {
+      if (document.pointerLockElement) document.exitPointerLock();
+    } catch (_) {}
+    const active = (ship.anim?.sleepingCrew || []).filter(
+      (av) => av.userData?.state && av.userData.state !== "sleeping"
+    );
+    const wrap = document.createElement("div");
+    wrap.id = "crew-role-confirm";
+    wrap.className = "ship-confirm";
+    let rows = "";
+    if (!active.length) {
+      rows = "<p>No active crew to reassign yet.</p>";
+    } else {
+      for (const av of active) {
+        const id = av.userData.npcId;
+        const fullName = String(av.userData.npcName || id).trim();
+        const first = fullName.split(/\s+/)[0] || fullName;
+        const role = String(av.userData.npcRole || "").trim();
+        const label = role ? first + "(" + role + ")" : first;
+        const cur = av.userData.npcWork || "cockpit";
+        const opts = CREW_WORKS.map((j) => {
+          const n = countWorkAssigned(j.work, ship.anim, id) + (j.work === cur ? 1 : 0);
+          const full = n >= (j.max || 1) && j.work !== cur;
+          const sel = j.work === cur ? " selected" : "";
+          const dis = full ? " disabled" : "";
+          return (
+            '<option value="' +
+            j.work +
+            '"' +
+            sel +
+            dis +
+            ">" +
+            (j.where || j.work) +
+            " " +
+            n +
+            "/" +
+            j.max +
+            "</option>"
+          );
+        }).join("");
+        rows +=
+          '<div class="ship-role-row"><span>' +
+          label +
+          '</span><select data-npc="' +
+          id +
+          '" data-original="' +
+          cur +
+          '">' +
+          opts +
+          "</select></div>";
+      }
+    }
+    const roleCost = npcRoleChangeCost();
+    const intro = active.length
+      ? "<p>Crew Assignment</p>" +
+        (roleCost
+          ? "<p>Reassign costs <strong>" + roleCost + " data points</strong>. A chef makes it free.</p>"
+          : "<p>Reassign is <strong>free</strong>.</p>")
+      : "";
+    wrap.innerHTML =
+      '<div class="ship-confirm-dialog" role="dialog" aria-modal="true">' +
+      intro +
+      rows +
+      '<div class="ship-confirm-actions">' +
+      (active.length
+        ? '<button type="button" class="ship-confirm-yes" id="crew-role-yes" disabled>Confirm</button>'
+        : "") +
+      '<button type="button" class="ship-confirm-no" id="crew-role-close">Close</button>' +
+      "</div></div>";
+    wrap.addEventListener("click", (e) => {
+      if (e.target === wrap) closeCrewRoleConfirm();
+    });
+    document.body.appendChild(wrap);
+    syncConfirmCursor();
+    document.getElementById("crew-role-close")?.addEventListener("click", () => {
+      closeCrewRoleConfirm();
+      relockPointerIfDesktop();
+    });
+    const yesBtn = document.getElementById("crew-role-yes");
+    const syncCrewRoleConfirm = () => {
+      if (!yesBtn) return;
+      let dirty = false;
+      wrap.querySelectorAll("select[data-npc]").forEach((sel) => {
+        if (sel.value !== sel.getAttribute("data-original")) dirty = true;
+      });
+      yesBtn.disabled = !dirty;
+    };
+    wrap.querySelectorAll("select[data-npc]").forEach((sel) => {
+      sel.addEventListener("change", syncCrewRoleConfirm);
+    });
+    yesBtn?.addEventListener("click", () => {
+      if (yesBtn.disabled) return;
+      const pending = [];
+      wrap.querySelectorAll("select[data-npc]").forEach((sel) => {
+        const id = sel.getAttribute("data-npc");
+        const work = sel.value;
+        const av = (ship.anim?.sleepingCrew || []).find((a) => a.userData?.npcId === id);
+        if (!av || av.userData.npcWork === work) return;
+        pending.push({ av, work, sel, id });
+      });
+      if (!pending.length) {
+        closeCrewRoleConfirm();
+        relockPointerIfDesktop();
+        return;
+      }
+      const counts = Object.create(null);
+      for (const j of CREW_WORKS) counts[j.work] = countWorkAssigned(j.work, ship.anim);
+      for (const p of pending) {
+        const old = p.av.userData.npcWork || "";
+        if (old) counts[old] = (counts[old] || 0) - 1;
+        counts[p.work] = (counts[p.work] || 0) + 1;
+        const job = CREW_WORKS.find((j) => j.work === p.work);
+        const max = job?.max || 1;
+        if (counts[p.work] > max) {
+          playGlassDenied();
+          p.sel.value = p.av.userData.npcWork;
+          syncCrewRoleConfirm();
+          shipVoice.trySpeak("That post is full.");
+          return;
+        }
+      }
+      const used = getSpentDatapoints();
+      const avail = availableDatapoints(collectedDatapoints, used);
+      const costEach = npcRoleChangeCost();
+      const total = costEach * pending.length;
+      if (avail < total) {
+        playGlassDenied();
+        shipVoice.trySpeak(pickInsufficientLine());
+        return;
+      }
+      addSpentDatapoints(total);
+      for (const p of pending) {
+        reassignNpcWork(p.av, p.work, ship.root, ship.anim);
+      }
+      syncConsoleDatapoints();
+      playCyberSuccess();
+      if (pending.length === 1) {
+        const av = pending[0].av;
+        shipVoice.trySpeak((av.userData.npcName || "Crew") + " is now " + (av.userData.npcRole || pending[0].work) + ".");
+      } else {
+        shipVoice.trySpeak("Crew posts updated.");
+      }
+      closeCrewRoleConfirm();
+      relockPointerIfDesktop();
+    });
+  }
+
+  function tryRoomBriefing(wm) {
+    if (anyShipDialogOpen()) return false;
+    const label = String(wm?.room?.userData?.label || roomAtPlayer()?.label || "");
+    if (wm && !restoredMonitorEligible(wm)) return false;
+    showRoomBriefPopup(label, wm);
+    return true;
+  }
+
+  function tryGardenHarvestVisit() {
+    /* Harvest is assigned on the server at week flip, then applied on ship load. */
   }
 
   function debugMonitorEligible(wm) {
@@ -1509,9 +2610,10 @@ async function boot() {
     const beds = ship.anim?.beds || [];
     if (beds.length) {
       const hits = unlockRaycaster.intersectObjects(beds, true);
-      if (hits.length && hits[0].distance <= 4.8) {
-        const bed = bedFromHit(hits[0].object);
-        if (bed) {
+      for (let i = 0; i < hits.length; i++) {
+        if (hits[i].distance > 4.8) break;
+        const bed = bedFromHit(hits[i].object);
+        if (bed && !bedNpcBusy(bed)) {
           unlockRaycaster.far = Infinity;
           return { sleeper: null, bed };
         }
@@ -1535,7 +2637,9 @@ async function boot() {
     }
     unlockRaycaster.setFromCamera(unlockNdc, camera);
     unlockRaycaster.far = 3.2;
-    const waiters = crew.filter((av) => av.userData.state !== "sleeping");
+    const waiters = crew.filter(
+      (av) => av.userData.state !== "sleeping" && !npcIsCelebrating(av)
+    );
     if (!waiters.length) {
       unlockRaycaster.far = Infinity;
       return null;
@@ -1549,9 +2653,14 @@ async function boot() {
   function tryActivateNpc(av) {
     if (!av || av.userData.state !== "sleeping") return false;
     if (anyShipDialogOpen()) return false;
-    if (isNpcWorkRoomLocked(av.userData.npcWork, ship.autoDoors)) {
+    const wakeWork = pickWakeWork(av, ship.anim, ship.autoDoors);
+    if (isWorkRoomSos("dorm", ship.anim)) {
+      alertDebugRoom("Debug this dorm room first.", "dorm");
+      return true;
+    }
+    if (!wakeWork) {
       playGlassDenied();
-      shipVoice.trySpeak(pickStationLockedLine(av.userData.npcWork));
+      shipVoice.trySpeak("Debug a work room first so they have a post.");
       return true;
     }
     if (getActivatedNpcIds().length >= npcActivateQuota()) {
@@ -1561,7 +2670,7 @@ async function boot() {
     }
     const used = getSpentDatapoints();
     const avail = availableDatapoints(collectedDatapoints, used);
-    if (avail < NPC_ACTIVATE_COST) {
+    if (avail < npcActivateCost()) {
       playGlassDenied();
       shipVoice.trySpeak(pickInsufficientLine());
       return true;
@@ -1580,6 +2689,7 @@ async function boot() {
       if (document.pointerLockElement) document.exitPointerLock();
     } catch (_) {}
 
+    const wakeCost = npcActivateCost();
     const name = av.userData.npcName || "this crewmate";
     const wrap = document.createElement("div");
     wrap.id = "npc-confirm";
@@ -1589,7 +2699,7 @@ async function boot() {
       '<p id="npc-confirm-title">Activate <strong>' +
       name +
       "</strong> with <strong>" +
-      NPC_ACTIVATE_COST +
+      wakeCost +
       " data points</strong>?</p>" +
       '<div class="ship-confirm-actions">' +
       '<button type="button" class="ship-confirm-yes" id="npc-confirm-yes">Yes</button>' +
@@ -1612,18 +2722,21 @@ async function boot() {
       closeNpcConfirm();
       const used = getSpentDatapoints();
       const avail = availableDatapoints(collectedDatapoints, used);
-      if (avail < NPC_ACTIVATE_COST) {
+      const wakeCost = npcActivateCost();
+      if (avail < wakeCost) {
         playGlassDenied();
         shipVoice.trySpeak(pickInsufficientLine());
-      } else if (isNpcWorkRoomLocked(av.userData.npcWork, ship.autoDoors)) {
+      } else if (isWorkRoomSos("dorm", ship.anim)) {
+        alertDebugRoom("Debug this dorm room first.", "dorm");
+      } else if (!pickWakeWork(av, ship.anim, ship.autoDoors)) {
         playGlassDenied();
-        shipVoice.trySpeak(pickStationLockedLine(av.userData.npcWork));
+        shipVoice.trySpeak("Debug a work room first so they have a post.");
       } else if (getActivatedNpcIds().length >= npcActivateQuota()) {
         playGlassDenied();
         shipVoice.trySpeak(pickToiletQuotaLine());
       } else {
-        addSpentDatapoints(NPC_ACTIVATE_COST);
-        beginNpcWake(av, ship.root);
+        addSpentDatapoints(wakeCost);
+        beginNpcWake(av, ship.root, ship.anim, ship.autoDoors);
         syncConsoleDatapoints();
         playCyberSuccess();
       }
@@ -1659,11 +2772,7 @@ async function boot() {
 
     if (!player.locked) return;
     const stall = nearestInteractable(ship.interactables, player.position);
-    if (!stall || stall.kind === "wallMonitor") return;
-    if (stall.kind === "toiletPrint") {
-      tryPrintToilet();
-      return;
-    }
+    if (!stall || stall.kind === "wallMonitor" || stall.kind === "toiletPrint" || stall.kind === "growTree") return;
     stall.toggle();
     // Main screen modes = desk 3D option planes (crosshair click)
   }
@@ -1692,9 +2801,14 @@ async function boot() {
     beginScene1();
     ship.mainScreen.userData.statusView?.start?.();
     void refreshCollectedDatapoints();
+    if (pendingHarvestLine) {
+      const line = pendingHarvestLine;
+      pendingHarvestLine = null;
+      setTimeout(() => shipVoice.trySpeak(line), 900);
+    }
     // If the script was already finished earlier, Scene 1 ends immediately
     syncScene1FromBriefing();
-    displayOpt?.classList.add("hidden");
+    hideTopMenu();
     requestAppFullscreen();
     syncDisplayOptLabel();
     if (touchMode) {
@@ -1733,20 +2847,384 @@ async function boot() {
     const now = performance.now();
     if (now - lastHelpToggle < 450) return;
     lastHelpToggle = now;
-    if (!displayOpt) return;
-    syncDisplayOptLabel();
-    displayOpt.classList.toggle("hidden");
+    if (!helpBtn && !topMenu) return;
+    const open = topMenu?.classList.contains("hidden");
+    if (guidedWalk) cancelGuidedWalk();
+    if (open) {
+      fillRoomOpts();
+      showTopMenu();
+    } else {
+      hideTopMenu();
+      relockAfterMenu();
+    }
   };
   helpBtn?.addEventListener("pointerup", toggleDisplayMenu);
-  displayOpt?.addEventListener("pointerup", (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (isAppFullscreen()) exitAppFullscreen();
-    else requestAppFullscreen();
-    setTimeout(syncDisplayOptLabel, 80);
-  });
   document.addEventListener("fullscreenchange", syncDisplayOptLabel);
   document.addEventListener("webkitfullscreenchange", syncDisplayOptLabel);
+
+  function wrapYawDelta(a, b) {
+    let d = b - a;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    return d;
+  }
+
+  function applyInputFreeze() {
+    const freeze = !!(yearTransit || guidedWalk || isTopMenuOpen());
+    player.inputFrozen = freeze;
+    if (freeze) {
+      player.stickX = 0;
+      player.stickY = 0;
+      player.lookStickX = 0;
+      player.lookStickY = 0;
+    }
+  }
+
+  let menuNavIndex = 0;
+
+  function menuNavItems() {
+    const items = [];
+    roomOptList?.querySelectorAll("button.room-opt").forEach((b) => items.push(b));
+    if (gotoOpt) items.push(gotoOpt);
+    if (settingsOpt) items.push(settingsOpt);
+    return items;
+  }
+
+  function applyMenuNav(i) {
+    const items = menuNavItems();
+    for (const el of items) el.classList.remove("menu-nav");
+    if (!items.length) return;
+    menuNavIndex = ((i % items.length) + items.length) % items.length;
+    const cur = items[menuNavIndex];
+    cur.classList.add("menu-nav");
+    try {
+      cur.focus();
+    } catch (_) {}
+  }
+
+  function relockAfterMenu() {
+    if (touchMode || yearTransit || guidedWalk || anyShipDialogOpen()) return;
+    try {
+      renderer.domElement.requestPointerLock();
+    } catch (_) {}
+  }
+
+  topMenuChanged = (open) => {
+    applyInputFreeze();
+    if (open) {
+      if (!touchMode) {
+        try {
+          document.exitPointerLock();
+        } catch (_) {}
+      }
+      applyMenuNav(0);
+    }
+  };
+
+  function finishGuidedWalk() {
+    if (!guidedWalk) return;
+    const arrived = guidedWalk.onArrive;
+    player.yaw = guidedWalk.endYaw;
+    player.pitch = guidedWalk.endPitch ?? -0.12;
+    player.position.y = player.eye;
+    guidedWalk = null;
+    applyInputFreeze();
+    player.update(0);
+    player.armLook();
+    if (typeof arrived === "function") arrived();
+  }
+
+  function decayGuidedBob(dt) {
+    const g = guidedWalk;
+    if (!g) return;
+    g.bobAmp = (g.bobAmp || 0) * Math.max(0, 1 - dt * 6);
+    player.position.y = player.eye + Math.sin(g.bobPhase || 0) * g.bobAmp;
+  }
+
+  function startGuidedWalk(spec) {
+    if (!spec || yearTransit) return;
+    const same = gotoIdForZoneLabel(roomAtPlayer()?.label) === spec.id;
+    const pts = same
+      ? [
+          { x: player.position.x, z: player.position.z },
+          { x: spec.x, z: spec.z },
+        ]
+      : playerPathToRoom(player.position.x, player.position.z, spec.id);
+    if (!pts.length) return;
+    const last = pts[pts.length - 1];
+    const atSpot = Math.hypot(player.position.x - last.x, player.position.z - last.z) < 0.35;
+    player.inputFrozen = true;
+    player.stickX = 0;
+    player.stickY = 0;
+    player.lookStickX = 0;
+    player.lookStickY = 0;
+    guidedWalk = {
+      pts,
+      i: 1,
+      endYaw: spec.yaw,
+      endPitch: -0.12,
+      stuckT: 0,
+      lastDist: 99,
+      mode: atSpot ? "turnLook" : "walk",
+      bobPhase: 0,
+      bobAmp: 0,
+    };
+    hideTopMenu();
+    applyInputFreeze();
+  }
+
+  function nearestDebugMonitorForLabel(label) {
+    const want = gotoIdForZoneLabel(label) || String(label || "").toLowerCase();
+    if (!want) return null;
+    let best = null;
+    let bestD = Infinity;
+    for (const wm of ship.anim?.wallMonitors || []) {
+      if (!debugMonitorEligible(wm)) continue;
+      const id = gotoIdForZoneLabel(wm.room?.userData?.label);
+      const L = String(wm.room?.userData?.label || "").toLowerCase();
+      if (id !== want && !L.includes(want)) continue;
+      const pose = standPoseForWallMonitor(wm);
+      if (!pose) continue;
+      const d = Math.hypot(pose.x - player.position.x, pose.z - player.position.z);
+      if (d < bestD) {
+        bestD = d;
+        best = wm;
+      }
+    }
+    return best;
+  }
+
+  function startGuidedWalkToMonitor(wm, onArrive) {
+    if (!wm || yearTransit) return false;
+    if (guidedWalk?.wm === wm) {
+      if (onArrive && !guidedWalk.onArrive) guidedWalk.onArrive = onArrive;
+      return true;
+    }
+    const pose = standPoseForWallMonitor(wm);
+    if (!pose) return false;
+    const roomId = gotoIdForZoneLabel(wm.room?.userData?.label);
+    const hereId = gotoIdForZoneLabel(roomAtPlayer()?.label);
+    const same = !!(hereId && roomId && hereId === roomId);
+    const pts = same
+      ? [
+          { x: player.position.x, z: player.position.z },
+          { x: pose.x, z: pose.z },
+        ]
+      : playerPathToRoom(player.position.x, player.position.z, roomId || "hub").concat([
+          { x: pose.x, z: pose.z },
+        ]);
+    if (!pts.length) return false;
+    const last = pts[pts.length - 1];
+    const atSpot = Math.hypot(player.position.x - last.x, player.position.z - last.z) < 0.4;
+    player.inputFrozen = true;
+    player.stickX = 0;
+    player.stickY = 0;
+    player.lookStickX = 0;
+    player.lookStickY = 0;
+    guidedWalk = {
+      pts,
+      i: 1,
+      endYaw: pose.yaw,
+      endPitch: pose.pitch,
+      stuckT: 0,
+      lastDist: 99,
+      mode: "waitHold",
+      afterWait: atSpot ? "turnLook" : "walk",
+      waitT: 1,
+      walkMul: 0.78,
+      turnWalk: 4.7,
+      turnLook: 4.0,
+      bobPhase: 0,
+      bobAmp: 0,
+      wm,
+      onArrive,
+    };
+    hideTopMenu();
+    applyInputFreeze();
+    return true;
+  }
+
+  function guidePlayerToDebugScreen(wm, openConfirm) {
+    if (!wm || !debugMonitorEligible(wm)) return false;
+    const arrived = () => {
+      player.armLook();
+      if (openConfirm) tryDebugWallMonitor(wm);
+    };
+    if (!startGuidedWalkToMonitor(wm, arrived)) {
+      if (openConfirm) tryDebugWallMonitor(wm);
+      return false;
+    }
+    return true;
+  }
+
+  function alertDebugRoom(line, label) {
+    playGlassDenied();
+    shipVoice.trySpeak(line);
+    const wm = nearestDebugMonitorForLabel(label);
+    if (wm) guidePlayerToDebugScreen(wm, false);
+  }
+
+  function updateGuidedWalk(dt) {
+    if (!guidedWalk) return false;
+    const g = guidedWalk;
+    if (g.mode === "waitHold") {
+      g.waitT = (g.waitT || 0) - dt;
+      player.stickX = 0;
+      player.stickY = 0;
+      player.lookStickX = 0;
+      player.lookStickY = 0;
+      player.position.y = player.eye;
+      player._applyCamera();
+      if (g.waitT <= 0) g.mode = g.afterWait || "walk";
+      return true;
+    }
+    const pitchK = g.walkMul ? 2.85 : 5;
+    player.pitch += ((g.endPitch ?? -0.12) - player.pitch) * Math.min(1, dt * pitchK);
+
+    if (g.mode === "turnLook") {
+      const dyaw = wrapYawDelta(player.yaw, g.endYaw);
+      const turn = Math.min(Math.abs(dyaw), dt * (g.turnLook || 5.8));
+      player.yaw += Math.sign(dyaw) * turn;
+      decayGuidedBob(dt);
+      player._applyCamera();
+      if (Math.abs(dyaw) < 0.025) finishGuidedWalk();
+      return true;
+    }
+
+    const pts = g.pts;
+    while (g.i < pts.length - 1) {
+      const cur = pts[g.i];
+      const nx = pts[g.i + 1];
+      if (Math.hypot(cur.x - nx.x, cur.z - nx.z) < 0.12) g.i += 1;
+      else break;
+    }
+    const tgt = pts[g.i];
+    if (!tgt) {
+      g.mode = "turnLook";
+      decayGuidedBob(dt);
+      player._applyCamera();
+      return true;
+    }
+    const dx = tgt.x - player.position.x;
+    const dz = tgt.z - player.position.z;
+    const dist = Math.hypot(dx, dz);
+    const wantYaw = dist > 0.04 ? Math.atan2(-dx, -dz) : g.endYaw;
+    const dyaw = wrapYawDelta(player.yaw, wantYaw);
+    const turn = Math.min(Math.abs(dyaw), dt * (g.turnWalk || 7.2));
+    player.yaw += Math.sign(dyaw) * turn;
+    const doorWait = walkBlockedByDoor(
+      player.position.x,
+      player.position.z,
+      tgt,
+      ship.autoDoors
+    );
+    if (doorWait || (Math.abs(dyaw) > 0.22 && dist > 0.35)) {
+      decayGuidedBob(dt);
+      player._applyCamera();
+      return true;
+    }
+    if (dist < 0.2) {
+      g.i += 1;
+      g.stuckT = 0;
+      if (g.i >= pts.length) g.mode = "turnLook";
+      decayGuidedBob(dt);
+      player._applyCamera();
+      return true;
+    }
+    if (dist >= g.lastDist - 0.01) g.stuckT += dt;
+    else g.stuckT = 0;
+    g.lastDist = dist;
+    if (g.stuckT > 1.35) {
+      g.i += 1;
+      g.stuckT = 0;
+      g.lastDist = 99;
+      decayGuidedBob(dt);
+      player._applyCamera();
+      return true;
+    }
+    const sp = player.speed * (g.walkMul || 2.16) * dt;
+    const step = Math.min(sp, dist);
+    player._move((dx / dist) * step, (dz / dist) * step);
+    g.bobPhase = (g.bobPhase || 0) + step * (g.walkMul ? 2.2 : 3.4);
+    g.bobAmp = g.walkMul ? 0.01 : 0.014;
+    player.position.y = player.eye + Math.sin(g.bobPhase) * g.bobAmp;
+    player._applyCamera();
+    return true;
+  }
+
+  function addRoomOpt(label, onPick) {
+    if (!roomOptList) return;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "room-opt";
+    btn.textContent = label;
+    btn.addEventListener("pointerup", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      hideTopMenu();
+      onPick();
+    });
+    roomOptList.appendChild(btn);
+  }
+
+  function fillRoomOpts() {
+    if (!roomOptList) return;
+    roomOptList.innerHTML = "";
+    const label = String(roomAtPlayer()?.label || "");
+    const mons = (ship.anim?.wallMonitors || []).filter(
+      (m) => String(m.room?.userData?.label || "") === label
+    );
+    const undebugged = mons.filter((m) => !m.debugged && debugMonitorEligible(m));
+    if (undebugged.length) {
+      addRoomOpt("Debug this room", () => {
+        let best = undebugged[0];
+        let bestD = Infinity;
+        for (const wm of undebugged) {
+          const pose = standPoseForWallMonitor(wm);
+          if (!pose) continue;
+          const d = Math.hypot(pose.x - player.position.x, pose.z - player.position.z);
+          if (d < bestD) {
+            bestD = d;
+            best = wm;
+          }
+        }
+        guidePlayerToDebugScreen(best, true);
+      });
+      return;
+    }
+    const restored = mons.find((m) => m.debugged);
+    if (!restored) return;
+    if (/garden/i.test(label) && treeSlotsLeft(ship.anim) > 0) {
+      addRoomOpt("Grow a data tree", () => tryGrowTree());
+    }
+    if (/wash/i.test(label) && toiletSlotsLeft(ship.anim) > 0) {
+      addRoomOpt("Print a toilet", () => tryPrintToilet());
+    }
+    if (/diner/i.test(label)) {
+      addRoomOpt("Reassign crew", () => showCrewRoleDialog());
+    }
+    if (/engine/i.test(label)) {
+      const rod = (ship.anim?.engineRods || []).find((r) => !r.repaired);
+      if (rod) addRoomOpt("Repair engine", () => tryRepairEngineRod(rod));
+    }
+    addRoomOpt("Staff manual", () => showRoomBriefPopup(label));
+  }
+
+  function cockpitExitStillBlocked() {
+    return briefingScriptDone() && !cockpitSideMonitorsDebugged();
+  }
+
+  gotoOpt?.addEventListener("pointerup", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    showGotoPopup();
+  });
+
+  settingsOpt?.addEventListener("pointerup", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    showSettingsPopup();
+  });
 
   renderer.domElement.addEventListener("click", (e) => {
     // Mobile uses pointerup only — click after pointerup double-fires and breaks confirm
@@ -1770,9 +3248,32 @@ async function boot() {
           tryDebugWallMonitor(debugMon);
           return;
         }
+        const rod = pickEngineRod(null, null);
+        if (rod) {
+          tryRepairEngineRod(rod);
+          return;
+        }
         const printHolo = pickToiletPrint(null, null);
         if (printHolo) {
           tryPrintToilet();
+          return;
+        }
+        const briefMon = pickRestoredMonitor(null, null);
+        if (briefMon) {
+          tryRoomBriefing(briefMon);
+          return;
+        }
+        if (pickGrowTree(null, null)) {
+          tryGrowTree();
+          return;
+        }
+        const kitchen = pickKitchenMachine(null, null);
+        if (kitchen) {
+          tryToggleKitchenMachine(kitchen);
+          return;
+        }
+        if (pickDinerRoster(null, null)) {
+          tryOpenDinerRoster();
           return;
         }
         const unlockDoor = pickUnlockDoor(null, null);
@@ -1796,7 +3297,7 @@ async function boot() {
       }
     }
     if (!touchMode) {
-      displayOpt?.classList.add("hidden");
+      hideTopMenu();
       renderer.domElement.requestPointerLock();
     }
   });
@@ -1804,7 +3305,7 @@ async function boot() {
   // Desktop: aim glow on unlock / desk option planes (crosshair)
   if (!touchMode) {
     window.addEventListener("mousemove", (e) => {
-      if (!player.locked || yearTransit || anyShipDialogOpen()) return;
+      if (!player.locked || yearTransit || anyShipDialogOpen() || isTopMenuOpen()) return;
       const lockedPtr = document.pointerLockElement === renderer.domElement;
       const deskOpt = lockedPtr
         ? pickDeskOption(null, null)
@@ -1812,7 +3313,11 @@ async function boot() {
       if (deskOpt) {
         setUnlockHover(null);
         setDebugMonitorHover(null);
+        setEngineRodHover(null);
         setToiletPrintHover(false);
+        setGrowTreeHover(false);
+        hoveredKitchen = null;
+        setDinerRosterHover(false);
         setBedHover(null);
         setDeskHover(deskOpt);
         return;
@@ -1825,20 +3330,76 @@ async function boot() {
         setUnlockHover(null);
         setBedHover(null);
         setToiletPrintHover(false);
+        setGrowTreeHover(false);
+        hoveredKitchen = null;
+        setDinerRosterHover(false);
+        setEngineRodHover(null);
         setDebugMonitorHover(debugMon);
         return;
       }
       setDebugMonitorHover(null);
+      const rod = lockedPtr
+        ? pickEngineRod(null, null)
+        : pickEngineRod(e.clientX, e.clientY);
+      if (rod) {
+        setUnlockHover(null);
+        setBedHover(null);
+        setToiletPrintHover(false);
+        setGrowTreeHover(false);
+        hoveredKitchen = null;
+        setDinerRosterHover(false);
+        setEngineRodHover(rod);
+        return;
+      }
+      setEngineRodHover(null);
       const printHolo = lockedPtr
         ? pickToiletPrint(null, null)
         : pickToiletPrint(e.clientX, e.clientY);
       if (printHolo) {
         setUnlockHover(null);
         setBedHover(null);
+        setGrowTreeHover(false);
+        hoveredKitchen = null;
+        setDinerRosterHover(false);
         setToiletPrintHover(true);
         return;
       }
       setToiletPrintHover(false);
+      const growHolo = lockedPtr
+        ? pickGrowTree(null, null)
+        : pickGrowTree(e.clientX, e.clientY);
+      if (growHolo) {
+        setUnlockHover(null);
+        setBedHover(null);
+        setToiletPrintHover(false);
+        hoveredKitchen = null;
+        setDinerRosterHover(false);
+        setGrowTreeHover(true);
+        return;
+      }
+      setGrowTreeHover(false);
+      const kitchen = lockedPtr
+        ? pickKitchenMachine(null, null)
+        : pickKitchenMachine(e.clientX, e.clientY);
+      if (kitchen) {
+        setUnlockHover(null);
+        setBedHover(null);
+        setDinerRosterHover(false);
+        if (kitchen !== hoveredKitchen) playHoloHover();
+        hoveredKitchen = kitchen;
+        return;
+      }
+      hoveredKitchen = null;
+      const roster = lockedPtr
+        ? pickDinerRoster(null, null)
+        : pickDinerRoster(e.clientX, e.clientY);
+      if (roster) {
+        setUnlockHover(null);
+        setBedHover(null);
+        setDinerRosterHover(true);
+        return;
+      }
+      setDinerRosterHover(false);
       const door = lockedPtr
         ? pickUnlockDoor(null, null)
         : pickUnlockDoor(e.clientX, e.clientY);
@@ -1882,8 +3443,37 @@ async function boot() {
           tryDebugWallMonitor(debugMon);
           return;
         }
-        if (pickToiletPrint(e.clientX, e.clientY)) {
+        let rod = pickEngineRod(e.clientX, e.clientY);
+        if (!rod) rod = pickEngineRod(null, null);
+        if (rod) {
+          tryRepairEngineRod(rod);
+          return;
+        }
+        if (pickToiletPrint(e.clientX, e.clientY) || pickToiletPrint(null, null)) {
           tryPrintToilet();
+          return;
+        }
+        let briefMon = pickRestoredMonitor(e.clientX, e.clientY);
+        if (!briefMon) briefMon = pickRestoredMonitor(null, null);
+        if (briefMon) {
+          const now = performance.now();
+          if (now - lastDebugTapMs < 450) return;
+          lastDebugTapMs = now;
+          tryRoomBriefing(briefMon);
+          return;
+        }
+        if (pickGrowTree(e.clientX, e.clientY) || pickGrowTree(null, null)) {
+          tryGrowTree();
+          return;
+        }
+        const kitchen =
+          pickKitchenMachine(e.clientX, e.clientY) || pickKitchenMachine(null, null);
+        if (kitchen) {
+          tryToggleKitchenMachine(kitchen);
+          return;
+        }
+        if (pickDinerRoster(e.clientX, e.clientY) || pickDinerRoster(null, null)) {
+          tryOpenDinerRoster();
           return;
         }
         const unlockDoor = pickUnlockDoor(e.clientX, e.clientY);
@@ -1914,6 +3504,7 @@ async function boot() {
     // freeing the cursor for desk bubbles must not kill WASD.
     if (document.pointerLockElement === renderer.domElement) {
       player.setLocked(true);
+      player.armLook();
     }
   });
 
@@ -1940,10 +3531,61 @@ async function boot() {
         closeToiletPrintConfirm();
         return;
       }
+      if (document.getElementById("grow-tree-confirm")) {
+        closeGrowTreeConfirm();
+        return;
+      }
+      if (document.getElementById("rod-confirm")) {
+        closeRodConfirm();
+        return;
+      }
       if (document.getElementById("reset-confirm")) {
         closeResetConfirm();
         return;
       }
+      if (document.getElementById("room-brief-confirm")) {
+        closeRoomBriefConfirm();
+        return;
+      }
+      if (document.getElementById("settings-confirm")) {
+        closeSettingsConfirm();
+        return;
+      }
+      if (document.getElementById("goto-confirm")) {
+        closeGotoConfirm();
+        return;
+      }
+      if (document.getElementById("crew-role-confirm")) {
+        closeCrewRoleConfirm();
+        return;
+      }
+      if (isTopMenuOpen()) {
+        hideTopMenu();
+        relockAfterMenu();
+        return;
+      }
+    }
+    if ((e.code === "ArrowUp" || e.code === "ArrowDown") && isTopMenuOpen()) {
+      if (anyShipDialogOpen()) return;
+      e.preventDefault();
+      e.stopPropagation();
+      applyMenuNav(menuNavIndex + (e.code === "ArrowDown" ? 1 : -1));
+      return;
+    }
+    if ((e.code === "Enter" || e.code === "NumpadEnter") && !touchMode) {
+      if (anyShipDialogOpen()) return;
+      if (hud?.classList.contains("hidden")) return;
+      const tag = String(e.target?.tagName || "");
+      if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+      e.preventDefault();
+      if (isTopMenuOpen()) {
+        const items = menuNavItems();
+        const cur = items[menuNavIndex] || items[0];
+        cur?.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true }));
+        return;
+      }
+      toggleDisplayMenu(e);
+      return;
     }
     if (e.code === "KeyR" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
       if (!enteringShip) return;
@@ -2013,6 +3655,7 @@ async function boot() {
       }
     }
     for (const c of anim.cores) {
+      if (c.userData?.engineRod) continue;
       c.scale.setScalar(1 + Math.sin(t * 3) * 0.06);
       c.material.emissiveIntensity = 1.2 + Math.sin(t * 4) * 0.35;
     }
@@ -2042,8 +3685,17 @@ async function boot() {
       const base = printHolo.userData.baseOpacity ?? 0.62;
       printHolo.material.opacity = base + Math.sin(t * 1.8) * 0.05;
     }
+    const growHolo = anim.growTree?.holo;
+    if (growHolo?.visible && growHolo.material) {
+      growHolo.rotation.y = t * 0.9;
+      if (!hoveredGrowTree) {
+        const base = growHolo.userData.baseOpacity ?? 0.62;
+        growHolo.material.opacity = base + Math.sin(t * 2.2) * 0.1;
+      }
+    }
     // Wall monitor colors are set on state change only (not every frame)
     for (const l of anim.engineLights) {
+      if (l.userData?.engineRod) continue;
       l.intensity = 1.8 + Math.sin(t * 4) * 0.5;
     }
     for (let i = 0; i < anim.blinkers.length; i++) {
@@ -2084,16 +3736,21 @@ async function boot() {
     frame += 1;
     const tossing = !!ship.anim?.southGate?.toss;
     if (tossing) {
+      cancelGuidedWalk();
       player.stickX = 0;
       player.stickY = 0;
       player.lookStickX = 0;
       player.lookStickY = 0;
+    } else if (updateGuidedWalk(dt)) {
+      /* camera is walking a Go-to path */
     } else {
       player.update(dt);
     }
     if (updateSouthCorridorGate(ship.anim, player, dt)) {
       shockShakeT = SHOCK_SHAKE_DUR;
       playElectricShock();
+      pendingHubDebugGuide = true;
+      player.inputFrozen = true;
       const fence = ship.anim?.southGate?.fence?.mesh;
       if (fence) {
         fence.getWorldPosition(holoWorldPos);
@@ -2111,6 +3768,15 @@ async function boot() {
       }
       const line = pickSouthGateLine();
       setTimeout(() => shipVoice.trySpeak(line), 280);
+    }
+    if (pendingHubDebugGuide && !ship.anim?.southGate?.toss) {
+      pendingHubDebugGuide = false;
+      const hubMon = nearestDebugMonitorForLabel("hub");
+      if (!guidePlayerToDebugScreen(hubMon, false)) {
+        player.inputFrozen = false;
+        applyInputFreeze();
+        player.armLook();
+      }
     }
     const tossingNow = !!ship.anim?.southGate?.toss;
     if (!tossingNow) {
@@ -2165,27 +3831,8 @@ async function boot() {
         if (!hubNear && wasHubNear) playYearCollapse();
       }
       wasHubNear = tossing ? false : hubNear;
-      // PC: look-aim highlight (skip while year exit is playing)
-      if (
-        !yearTransit &&
-        !tossing &&
-        !mobileQuality &&
-        hubNear &&
-        player.locked &&
-        hub?.setAimedYear &&
-        hub.expand > 0.45
-      ) {
-        yearNdc.set(0, 0);
-        const hit = hub.pickYearByRay(camera, yearRaycaster, yearNdc);
-        if (hit !== lastAimedYear) {
-          if (hit) playYearHover();
-          lastAimedYear = hit;
-        }
-        hub.setAimedYear(hit);
-      } else if (!yearTransit && !tossing && (mobileQuality || !hubNear)) {
-        if (lastAimedYear) lastAimedYear = null;
-        hub?.setAimedYear?.(null);
-      }
+      if (lastAimedYear) lastAimedYear = null;
+      hub?.setAimedYear?.(null);
     }
     updateHubFloorHalos(ship.anim, dt);
     {
@@ -2239,14 +3886,21 @@ async function boot() {
       }
       boxHum.update(dt, boxDist);
     }
-    updateStallDoors(ship.interactables, dt);
+    updateStallDoors(ship.interactables, dt, player.position);
     updateUnlockVapor(dt);
+    updateTreeGrowFx(ship.anim, dt);
+    updatePrintedToilets(ship.anim, dt);
+    updateDinerRosterClip(ship.anim, t);
+    syncHudRoomName();
     updateUnlockDeny(dt);
     updateDenyFlash(dt);
     updateDebugRepair(dt);
     updateDeskOptionsVisibility();
     {
       const here = roomAtPlayer()?.label;
+      const inGarden = here === "Hydroponic Garden";
+      if (inGarden && !wasInGarden) tryGardenHarvestVisit();
+      wasInGarden = inGarden;
       const inHub = here === "Hub";
       const inCockpit =
         here === "Cockpit" || scenes.isActive(SCENE.COCKPIT_BRIEFING);
@@ -2317,7 +3971,11 @@ async function boot() {
       }
       // Crosshair / look-stick aim glow every frame (PC + phone)
       updateDebugMonitorAimHover();
+      updateEngineRods(ship.anim, dt, t, player.position);
+      updateEngineRodAimHover();
+      updateEngineRodSparks(dt);
       // Door lintel glow labels — hide when far; sealed rooms stay unnamed
+      const doorGlowR2 = 3.15 * 3.15;
       if (ship.root && (frame & 3) === 0) {
         ship.root.traverse((o) => {
           if (!o?.userData?.doorOverLabel) return;
@@ -2328,7 +3986,7 @@ async function boot() {
           o.getWorldPosition(holoWorldPos);
           const dx = holoWorldPos.x - px;
           const dz = holoWorldPos.z - pz;
-          o.visible = dx * dx + dz * dz <= nearR2 * 1.6;
+          o.visible = dx * dx + dz * dz <= doorGlowR2;
         });
       }
     }
@@ -2347,14 +4005,17 @@ async function boot() {
       hubFloor.emissiveIntensity = 0.55 + Math.sin(t * 2.0) * 0.1;
     }
     updateWallMonitorSosPulse(ship.anim, t, player.position, ship.autoDoors);
+    updateRoomBriefFades(ship.anim, t, dt);
     updateSosCeilingSparks(sosSparks, dt, roomAtPlayer(), player.position, {
       active: player.locked && !yearTransit,
       mobile: mobileQuality,
       monitors: ship.anim?.wallMonitors,
+      engineRods: ship.anim?.engineRods,
     });
     pumpPendingSosRestore(ship.anim);
     updatePlants(ship.anim, t);
     updateSleepingCrew(ship.anim?.sleepingCrew, t, player.position, 22, dt);
+    updateBedPods(ship.anim, dt);
     {
       const crew = ship.anim?.sleepingCrew;
       let hoverT = 0;
@@ -2369,6 +4030,7 @@ async function boot() {
     updateAwakeCrew(ship.anim?.sleepingCrew, dt, t, ship.autoDoors, player.position, ship.anim);
     updateSittingCrew(ship.anim?.sleepingCrew, dt, t, player.position);
     updateNpcChitchat(ship.anim?.sleepingCrew, dt, player.position);
+    updateToiletMarquee(ship.anim, t);
     updateNpcWiggle(ship.anim?.sleepingCrew, dt);
     // deco only when near animated areas; throttle harder on mobile
     const px = player.position.x;
@@ -2435,6 +4097,8 @@ async function boot() {
             flashCockpitAccessDenied();
             const line = cockpitExitLine;
             setTimeout(() => shipVoice.trySpeak(line), 280);
+            const wm = nearestDebugMonitorForLabel("cockpit");
+            if (wm) guidePlayerToDebugScreen(wm, false);
           }
           nearby = cockpitExitLine;
         } else {

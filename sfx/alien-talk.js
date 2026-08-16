@@ -4,7 +4,7 @@
  * Not TTS. Ship AI still uses SpeechSynthesis.
  */
 
-import { getAudioCtx, resumeAudio } from "./ctx.js";
+import { getAudioCtx, resumeAudio, busOut } from "./ctx.js?v=20260817al";
 
 const VOICES = {
   nova: { base: 340, click: 0.38, wet: 0.22, growl: 0.12 },
@@ -17,6 +17,8 @@ const VOICES = {
   aden: { base: 185, click: 0.2, wet: 0.48, growl: 0.18 },
   sable: { base: 255, click: 0.16, wet: 0.44, growl: 0.14 },
   pax: { base: 160, click: 0.28, wet: 0.3, growl: 0.32 },
+  wren: { base: 400, click: 0.18, wet: 0.5, growl: 0.08 },
+  yara: { base: 275, click: 0.1, wet: 0.7, growl: 0.06 },
   crew: { base: 250, click: 0.3, wet: 0.35, growl: 0.22 },
 };
 

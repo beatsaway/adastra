@@ -5,7 +5,7 @@
  * - Normal vs SOS targets; crossfade params over ~0.4s (no hard jumps)
  */
 
-import { getAudioCtx, resumeAudio } from "./ctx.js";
+import { getAudioCtx, resumeAudio, busOut } from "./ctx.js?v=20260817al";
 
 const TRANSITION_SEC = 0.4;
 

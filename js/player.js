@@ -62,12 +62,23 @@ export class Player {
     this.touchLookOnly = false;
     this._euler = new THREE.Euler(0, 0, 0, "YXZ");
     this._onMove = this._onMove.bind(this);
+    this._lookArmedAt = 0;
+    this._dropLookSpikes = 0;
 
     document.addEventListener("mousemove", this._onMove);
   }
 
+  /** Ignore the first look packets after pointer lock (browser can inject a 180° spike). */
+  armLook() {
+    this._lookArmedAt = performance.now() + 220;
+    this._dropLookSpikes = 10;
+    this._lastClientX = null;
+    this._lastClientY = null;
+  }
+
   _onMove(e) {
     if (!this.locked || this.inputFrozen || this.touchLookOnly) return;
+    if (this._lookArmedAt && performance.now() < this._lookArmedAt) return;
     // Free cursor (desk bubbles / menus): keep WASD, but don't yank look with mouse
     if (typeof document !== "undefined" && !document.pointerLockElement) {
       this._lastClientX = null;
@@ -88,7 +99,14 @@ export class Player {
       this._lastClientX = e.clientX;
       this._lastClientY = e.clientY;
     }
-    if (dx || dy) this.look(dx, dy);
+    if (dx || dy) {
+      if (Math.abs(dx) > 72 || Math.abs(dy) > 72) return;
+      if (this._dropLookSpikes > 0) {
+        this._dropLookSpikes -= 1;
+        if (Math.abs(dx) > 28 || Math.abs(dy) > 28) return;
+      }
+      this.look(dx, dy);
+    }
   }
 
   look(dx, dy) {
@@ -125,10 +143,13 @@ export class Player {
   }
 
   setLocked(v) {
+    const was = this.locked;
     this.locked = v;
     if (!v) {
       this._lastClientX = null;
       this._lastClientY = null;
+    } else if (!was) {
+      this.armLook();
     }
   }
 

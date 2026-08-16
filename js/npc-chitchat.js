@@ -317,56 +317,36 @@ export const NPC_CHITCHAT = {
     "Thanks for the visit. I'll be here. Loudly.",
   ],
   lila: [
-    "Washroom watch reporting. Please wash your hands. That's the whole speech.",
-    "Captain, this room looks simple. That's because I work here.",
-    "Clean is a kind of safety. I mean that.",
-    "Don't splash the walls on purpose. Accidents are fine. Purpose is rude.",
-    "I missed soap. I missed order. I missed a job that makes sense.",
-    "If it smells like cleaner, I did my job. If it doesn't, I will.",
-    "Stalls are for privacy. Hallways are for walking. Easy rules.",
-    "The storm didn't stop germs. That's why I'm here.",
-    "You can visit. Then wash. Then visit somewhere else.",
-    "I talk to the sinks a little. They gurgle. That's conversation.",
-    "A hygiene officer is a cleanliness captain. Smaller room. Same pride.",
-    "Don't leave towels on the floor. They live on hooks. I checked.",
-    "Captain, clean hands before snacks. Tess will thank me. You will too.",
-    "I can wait. Dirt can't hide forever.",
-    "If the floor is shiny, that's not ice. That's me.",
-    "I dreamed of a perfectly stacked shelf. Then I woke up and stacked it.",
-    "Showers first, adventures second. That's the Lila plan.",
-    "This room should feel calm. That's part of being clean.",
-    "Don't tap every stall. One is enough. They're not a drum set.",
-    "I like this job because everyone leaves nicer than they came in. That's the hope.",
-    "If I point at the soap, I'm not mad. I'm helpful.",
-    "Captain, the washroom is open. Please treat it like a nice place.",
-    "I keep the stalls working so nobody has to panic. Important work.",
-    "A clean ship is a healthy ship. Aden and I agree. Rare, but true.",
-    "Thanks for waking me. Somebody had to make this room not scary.",
-    "If you hear water, that's good. Water should be where we put it.",
-    "Don't mix the soaps for science. I already did that. It was not science.",
-    "I count supplies the way Kai counts clicks.",
-    "The washroom is not a playground. It is a reset button for humans.",
-    "You can talk. Just not while I'm explaining soap. That's sacred time.",
-    "If a stall door is shut, knock. Manners work in space too.",
-    "I missed being useful. Clean is useful.",
-    "Captain, wipe your boots if you came from the garden. Jun will understand. I will glow.",
-    "I like quiet water sounds. They're the opposite of the storm.",
-    "Don't sit on the sinks. I will notice. I always notice.",
-    "A good wash is a tiny holiday. I recommend it.",
-    "If I smile at a tap, it didn't drip. Victory.",
-    "Keep exploring. Come back if something leaks. I'll be thrilled. Kind of.",
-    "I can wait for people to remember soap. I will also remind them.",
-    "This room held. The plumbing held. I can work with that.",
-    "Hygiene is not fancy. It is how crews stay a crew.",
-    "Captain, thanks for checking in. Most captains forget the washroom. You didn't.",
-    "I talk fast about cleaning. It's my sport.",
-    "If the mirror looks clear, I just won a tiny fight with fog.",
-    "Don't splash the holo. Don't splash me either. Fair deal.",
-    "I woke up and wanted a mop. That's how you know I'm me.",
-    "Clean corners make me happy. I'm not sorry.",
-    "The ship is big. This room is small. I still take it seriously.",
-    "Leave this place nicer. That's the only homework.",
-    "Thanks for visiting. Wash up. Then go be captain.",
+    "Engine room reporting. I like when the tools are in a line. Kai copes.",
+    "Captain, the rumble is normal. The mess is not. I'm working on the mess.",
+    "Don't poke glowing parts. Wash your hands after you almost do.",
+    "I missed order. Engines can be orderly. That's my whole pitch.",
+    "Kai hears bearings. I hear clutter. We are a team.",
+    "If a panel is smudged, I will notice. Then I will wipe it. Then I will notice again.",
+    "Thanks for waking me. Somebody had to make this room less chaotic.",
+    "A reactor tech can also be tidy. Watch me.",
+    "You can visit. Stay a step back. And don't leave wrappers on the pipes.",
+    "The storm shook the ship. It also shook every unlabeled box. Rude.",
+    "I talk to the engine a little. I also alphabetize the wrenches. Both help.",
+    "If it rattles, Kai's on it. If it looks sloppy, that's me.",
+    "Captain, collect data points. Then come back. I'll have a cleaner floor.",
+    "Machines like routine. I like labeled routine. We get along.",
+    "Don't sit on the pipes. They're busy. Also they're dusty. Was dusty.",
+    "I dreamed of a perfectly stacked shelf. Then I woke up in the engine room. Close enough.",
+    "A good rumble is fine. A mystery bolt on the floor is not.",
+    "I can wait. Engines teach patience. So does sorting bolts by size.",
+    "If I grin at a panel, a number did what I wanted. And the glass is clean.",
+    "Keep the door clear. Heat likes to leave. So do trip hazards.",
+    "I like this job because when it works, the whole ship works. And it looks nicer.",
+    "Captain, you're safe. If you weren't, I'd be louder. And wiping faster.",
+    "Don't tap the reactor. It already has a rhythm. I already have a rag.",
+    "Thanks for coming down here. Most people don't, until something breaks or drips.",
+    "Green lights make me sleepy in a good way. Clean floors do too.",
+    "This room is loud. I can still keep it neat. That's the flex.",
+    "If Tess brings snacks later, I will hide the crumbs. Science.",
+    "Stay as long as you want. Just don't unplug anything. Or leave it crooked.",
+    "I woke up and checked the engine, then the floor. Typical.",
+    "A wrench is a kind of hello in this room. A clean wrench is a better hello.",
   ],
   aden: [
     "Flight medic, reporting. Anyone dizzy? No? Good. Stay that way.",
@@ -484,10 +464,124 @@ export const NPC_CHITCHAT = {
     "Forward is that way. I checked twice.",
     "Thanks for visiting. Now let me draw the next bit.",
   ],
+  wren: [
+    "Garden crew. I prune. Jun philosophizes. Yara names the moss. It works.",
+    "Captain, if you step on a root I will notice. I notice everything small.",
+    "Don't water the holograms. Only the trees. I have said this out loud now.",
+    "I like quiet growth. Alarms are rude to leaves.",
+    "Thanks for waking me. Somebody had to keep Jun from talking the plants to sleep.",
+    "A gardener is a patient mechanic. Same job. Softer tools.",
+    "If a leaf looks dramatic, that's Yara's favorite. I just cut the brown bits.",
+    "You can visit. Walk the purple ring. Not on the soil. That's the whole tour.",
+    "I count new shoots the way Kai counts bolts. Less spark, same satisfaction.",
+    "The storm was loud. Plants don't care about loud. I like them for that.",
+    "Captain, collect data. Then come back. I'll have something greener.",
+    "Don't ask me to name the trees. Yara already did. Twice.",
+    "If I go quiet, I'm looking at a stem. It's a whole plot twist.",
+    "Jun says please to the plants. I say stay upright. Both seem to work.",
+    "I missed dirt. Weird thing to miss on a spaceship. Still true.",
+    "A good harvest is a quiet brag. I'll brag later. After the watering.",
+    "Don't tap the planter edge. It's not a drum. It's a border. Sacred border.",
+    "I can wait. Growth waits. I can wait harder.",
+    "If Tess wants herbs, she can ask. I will pretend to think about it. Then yes.",
+    "This room smells like a promise. That's the water and the dirt. And me.",
+    "Captain, you're blocking a sun lamp a tiny bit. Just a tiny bit.",
+    "I woke up and checked the leaves first. Typical. Correct.",
+    "Keep exploring. Leave the moss. Yara will file a complaint.",
+    "Green crew reporting. Scissors ready. Smile optional.",
+    "Thanks for stopping by. Now let me prune in peace. Kind of peace.",
+  ],
+  yara: [
+    "Hi. I'm Yara. I talk to moss. The moss is doing great, thanks.",
+    "Captain, the garden is a tiny forest. Please use your indoor forest voice.",
+    "Don't poke the purple ring. It's shy. Also it's a wall.",
+    "Jun is the poet. Wren is the scissors. I am the one who notices dew.",
+    "If a plant leans, I lean back. That's communication.",
+    "Thanks for waking me. The moss missed an audience.",
+    "A gardener is a slow superhero. No cape. Damp sleeves.",
+    "You can visit. Just don't name the trees without me. I have a list.",
+    "That one is Soup. No, wait. Pax already used Soup. This one is Blanket.",
+    "The storm was a cliffhanger. This room is the soft episode after.",
+    "Captain, walk soft. Roots are watching. Not really. Kind of. Fine, not really.",
+    "I like when people come in, say wow, and then leave the dirt alone. Perfect guest.",
+    "If I smile at a leaf, it did a tiny plot twist. New green.",
+    "Don't sit in the soil. That's a joke. Please still don't.",
+    "I can wait. Moss invented waiting. I'm studying.",
+    "Tell Tess we will have something edible one day. One day is a character.",
+    "I missed this damp quiet. Pods are dry. Emotionally.",
+    "If the air feels nicer, thank the plants. Thank Wren's scissors. Thank my staring.",
+    "Captain, collect data points. Then come smell dirt. Reward arc.",
+    "I keep a secret: the yellow tree is my favorite. Don't tell the others.",
+    "A good garden episode has no explosions. Only water. I'm directing.",
+    "Don't rush growth. That's the whole genre of this room.",
+    "I woke up and said hi to the moss. It did not answer. Rude. Iconic.",
+    "Keep exploring. Leave the leaves. That's the pact.",
+    "Thanks for visiting. The plants say hi. I'm translating. Poorly. Lovingly.",
+  ],
 };
 
-export function pickNpcChitchatLine(id, recent = []) {
-  const lines = NPC_CHITCHAT[id];
+const ROLE_CHITCHAT_SOURCES = {
+  cockpit: ["nova", "rex", "aden", "sable", "pax"],
+  hub: ["mira"],
+  garden: ["jun", "wren", "yara"],
+  diner: ["tess"],
+  engine: ["kai", "lila"],
+};
+
+const CREW_NAME_RE = /\b(Nova|Rex|Mira|Jun|Tess|Kai|Lila|Aden|Sable|Pax|Wren|Yara)\b/;
+
+const WASHROOM_CHITCHAT = [
+  "Captain, hygiene is not optional. It's how we keep a crew.",
+  "More toilets means more people we can wake. That's the quota.",
+  "I mop. I watch the stalls. I keep this ship from getting sick.",
+  "If the washroom fails, the roster fails. Simple as that.",
+  "Print another toilet if you can. Two more crew can come online.",
+  "Clean hands. Clean ship. That's my whole briefing.",
+  "Don't skip the sink. The data points can wait one wash.",
+  "This room is life support with tiles.",
+  "A dirty stall is a delayed launch. I take that personally.",
+  "The roomba helps. I still check every corner.",
+  "Crew can't work if they can't wash. That's not poetry. That's plumbing.",
+  "Hygiene first. Heroics after the soap.",
+  "I like this job. It's quiet. It's important. It smells like lemon.",
+  "If you print more toilets, I will cheer. Quietly. With a mop.",
+  "The quota is real. Stalls in, sleepers out.",
+  "Captain, thank you for keeping this room alive. The crew feels it.",
+  "Germs don't care about rank. I do care about soap.",
+  "Two more awake friends per extra toilet. That's the deal.",
+  "I walk the tiles so you don't have to think about them.",
+  "A clean ship is a living ship. I'm on it.",
+];
+
+function chitchatRoleKey(work) {
+  const w = String(work || "").toLowerCase();
+  if (w === "kitchen") return "diner";
+  if (w === "crewdeck" || w === "crew deck") return "hub";
+  if (ROLE_CHITCHAT_SOURCES[w] || w === "washroom") return w;
+  return "cockpit";
+}
+
+const _roleLineCache = Object.create(null);
+function chitchatLinesForRole(work) {
+  const key = chitchatRoleKey(work);
+  if (_roleLineCache[key]) return _roleLineCache[key];
+  if (key === "washroom") {
+    _roleLineCache[key] = WASHROOM_CHITCHAT.slice();
+    return _roleLineCache[key];
+  }
+  const out = [];
+  for (const id of ROLE_CHITCHAT_SOURCES[key] || []) {
+    for (const line of NPC_CHITCHAT[id] || []) {
+      if (CREW_NAME_RE.test(line)) continue;
+      out.push(line);
+    }
+  }
+  _roleLineCache[key] = out.length ? out : WASHROOM_CHITCHAT.slice();
+  return _roleLineCache[key];
+}
+
+export function pickNpcChitchatLine(work, recent = []) {
+  const lines = chitchatLinesForRole(work);
   if (!lines?.length) return "";
   for (let n = 0; n < 12; n++) {
     const line = lines[(Math.random() * lines.length) | 0];

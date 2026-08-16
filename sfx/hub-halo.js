@@ -2,7 +2,7 @@
  * Looping halo source at the Info Hub centre — living antigrav field, like sleeper hover.
  */
 
-import { getAudioCtx, resumeAudio } from "./ctx.js";
+import { getAudioCtx, resumeAudio, busOut } from "./ctx.js?v=20260817al";
 
 export class HubHaloHum {
   constructor() {
@@ -35,7 +35,7 @@ export class HubHaloHum {
 
     const master = ctx.createGain();
     master.gain.value = 0;
-    master.connect(ctx.destination);
+    master.connect(busOut("sfx") || ctx.destination);
     this._gain = master;
 
     const drone = ctx.createOscillator();

@@ -2,6 +2,8 @@
 
 Walkable Three.js spacecraft interior. Cockpit, hub, garden, diner, dorm, washroom, and engine room — with FPS controls and mobile thumbsticks.
 
+Standalone demo: you start with 1000 data points. Progress is saved in the browser only (no login, no cloud save, no year-course links).
+
 ## Run
 
 Double-click `start.bat` (Windows), or from this folder:

@@ -362,18 +362,20 @@ canvas {
   transform: translateX(-50%);
   bottom: auto;
   z-index: 20;
-  width: 9rem;
-  height: 4.6rem;
+  width: 14rem;
+  height: auto;
+  min-height: 7.2rem;
   padding: 0;
   border: none;
   border-radius: 0;
   background: transparent;
-  color: rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.18);
   cursor: pointer;
   box-shadow: none;
   display: flex;
-  align-items: flex-start;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
   filter: none;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
@@ -382,7 +384,7 @@ canvas {
 #help-btn:hover,
 #help-btn:focus-visible {
   background: transparent;
-  color: rgba(255, 255, 255, 0.22);
+  color: rgba(255, 255, 255, 0.3);
 }
 
 /* Downward-pointing triangle (▾) */
@@ -390,41 +392,99 @@ canvas {
   display: block;
   width: 0;
   height: 0;
-  margin-top: 0;
-  border-left: 42px solid transparent;
-  border-right: 42px solid transparent;
-  border-top: 50px solid currentColor;
+  margin-top: 0.15rem;
+  border-left: 68px solid transparent;
+  border-right: 68px solid transparent;
+  border-top: 80px solid currentColor;
 }
 
-#display-opt {
+.hud-room-name {
+  position: relative;
+  z-index: 1;
+  margin-top: 0.2rem;
+  max-width: 12.5rem;
+  padding: 0 0.2rem;
+  font-family: "Sora", "IBM Plex Sans", system-ui, sans-serif;
+  font-size: 0.68rem;
+  font-weight: 650;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  text-align: center;
+  line-height: 1.15;
+  color: rgba(255, 255, 255, 0.72);
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.75);
+  pointer-events: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 1;
+  transition: opacity 0.22s ease;
+}
+
+.hud-room-name.is-fading {
+  opacity: 0;
+}
+
+#help-btn.is-open .hud-room-name {
+  visibility: hidden;
+}
+
+#top-menu {
   pointer-events: auto;
   position: absolute;
-  top: 3.1rem;
+  top: 4.55rem;
   left: 50%;
   transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.08rem;
+}
+
+#top-menu.hidden {
+  display: none;
+}
+
+#goto-opt,
+#settings-opt,
+.room-opt {
+  pointer-events: auto;
+  position: relative;
+  left: auto;
+  transform: none;
   bottom: auto;
   z-index: 20;
   font-family: "Sora", "IBM Plex Sans", system-ui, sans-serif;
-  font-size: 0.72rem;
-  letter-spacing: 0.06em;
-  color: #2a3648;
-  background: rgba(255, 255, 255, 0.92);
-  padding: 0.45rem 0.85rem;
-  border-radius: 4px;
-  border: 1px solid rgba(40, 80, 140, 0.28);
-  box-shadow: 0 2px 10px rgba(40, 60, 90, 0.1);
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.62);
+  background: transparent;
+  padding: 0.28rem 0.4rem;
+  border: none;
+  box-shadow: none;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.55);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
 }
 
-#display-opt:hover {
-  border-color: rgba(40, 140, 255, 0.55);
-  background: #fff;
+#goto-opt:hover,
+#settings-opt:hover,
+.room-opt:hover,
+#goto-opt.menu-nav,
+#settings-opt.menu-nav,
+.room-opt.menu-nav {
+  color: rgba(255, 255, 255, 0.96);
+  background: transparent;
 }
 
-#display-opt.hidden {
-  display: none;
+#room-opt-list {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.05rem;
 }
 
 /* Dual circle sticks — bottom-left / bottom-right, sized by viewport % */
@@ -535,8 +595,8 @@ canvas {
     left: 50%;
   }
 
-  #display-opt {
-    top: 3.1rem;
+  #top-menu {
+    top: 4.55rem;
     left: 50%;
   }
 
@@ -593,9 +653,215 @@ canvas {
   margin-bottom: 1.15rem;
 }
 
+.ship-brief-dialog {
+  width: min(92vw, 480px);
+  text-align: left;
+}
+
+.ship-brief-pic {
+  display: block;
+  width: 58%;
+  max-width: 260px;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  object-fit: fill;
+  margin: 0 auto 0.75rem;
+  border-radius: 8px;
+  background: #0a2030;
+  opacity: 1;
+}
+
+.ship-brief-kicker {
+  margin: 0 0 0.55rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: #5a6a7c;
+}
+
+.ship-brief-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.ship-brief-room-select {
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+  padding: 0 1.15rem 0.05rem 0.15rem;
+  border: none;
+  border-bottom: 1px solid rgba(30, 40, 55, 0.28);
+  border-radius: 0;
+  background-color: transparent;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path fill='%235a6a7c' d='M0 0l5 6 5-6z'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 0.05rem center;
+  background-size: 0.55rem 0.35rem;
+  font: inherit;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #1e2733;
+  cursor: pointer;
+}
+
+.ship-brief-room-select:focus {
+  outline: none;
+  border-bottom-color: #2a6a88;
+}
+
+.ship-goto-dialog {
+  width: min(92vw, 260px);
+  text-align: left;
+}
+
+.ship-goto-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0.1rem 0 0.85rem;
+}
+
+.ship-goto-item {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0.22rem 0.4rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  font-family: "Sora", "IBM Plex Sans", system-ui, sans-serif;
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-align: left;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.ship-goto-item.is-ok {
+  color: #1b8a42;
+}
+
+.ship-goto-item.is-sos {
+  color: #d02424;
+}
+
+.ship-goto-item.is-locked {
+  color: #8b95a1;
+  font-weight: 500;
+  cursor: default;
+}
+
+.ship-goto-item.is-here {
+  background: transparent;
+  animation: goto-here-pulse 1.7s ease-in-out infinite;
+}
+
+@keyframes goto-here-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.38;
+  }
+}
+
+.ship-goto-item:focus-visible:not(:disabled) {
+  outline: none;
+}
+
+.ship-goto-item:disabled {
+  cursor: default;
+}
+
+.ship-brief-dialog p:last-of-type {
+  margin-bottom: 0.7rem;
+}
+
+.ship-brief-list {
+  margin: 0 0 1.1rem;
+  padding-left: 1.15rem;
+  font-size: 0.95rem;
+  line-height: 1.55;
+}
+
+.ship-brief-list li {
+  margin: 0.35rem 0;
+}
+
+.ship-todo-list {
+  line-height: 1.28;
+}
+
+.ship-todo-list li {
+  margin: 0.06rem 0;
+}
+
+.ship-vol-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin: 0.55rem 0;
+  font-size: 0.92rem;
+}
+
+.ship-vol-row span {
+  min-width: 5.2rem;
+}
+
+.ship-vol-row input[type="range"] {
+  flex: 1;
+  accent-color: #2a6a88;
+}
+
+#settings-display {
+  min-width: 8rem;
+  max-width: 11rem;
+  padding: 0.28rem 0.4rem;
+  border: 1px solid #c8d0da;
+  border-radius: 6px;
+  background: #fff;
+  font-family: "Sora", "IBM Plex Sans", system-ui, sans-serif;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
 .ship-confirm-dialog strong {
   color: #b83a3a;
   font-weight: 700;
+}
+
+.ship-role-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+  margin: 0.45rem 0;
+  text-align: left;
+  font-size: 0.92rem;
+}
+
+.ship-role-row > span {
+  flex: 1 1 auto;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.ship-role-row select {
+  flex: 1;
+  min-width: 8rem;
+  max-width: 11rem;
+  padding: 0.28rem 0.4rem;
+  border-radius: 6px;
+  border: 1px solid #c8d0da;
+  background: #fff;
 }
 
 .ship-confirm-actions {
@@ -618,9 +884,9 @@ canvas {
 }
 
 .ship-confirm-yes {
-  background: rgba(40, 140, 255, 0.55);
+  background: #2f7dff;
   color: #fff;
-  border-color: rgba(255, 255, 255, 0.55);
+  border-color: #1a5fd6;
 }
 
 .ship-confirm-no {
@@ -629,7 +895,15 @@ canvas {
 }
 
 .ship-confirm-yes:hover {
-  background: rgba(40, 140, 255, 0.75);
+  background: #1f6cf0;
+}
+
+.ship-confirm-yes:disabled,
+.ship-confirm-yes:disabled:hover {
+  background: #c5ccd6;
+  color: #6a7380;
+  border-color: #b4bcc6;
+  cursor: not-allowed;
 }
 
 .ship-confirm-no:hover {

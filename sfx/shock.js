@@ -2,7 +2,7 @@
  * Force-field / electric shock one-shot.
  */
 
-import { getAudioCtx, resumeAudio } from "./ctx.js";
+import { getAudioCtx, resumeAudio, busOut } from "./ctx.js?v=20260817al";
 
 /** Cached raw white noise — generate once, reuse. */
 let _whiteBuf = null;
@@ -58,7 +58,7 @@ function playGatedNoiseSpark({
   src.connect(hp);
   hp.connect(bp);
   bp.connect(g);
-  g.connect(ctx.destination);
+  g.connect(busOut("sfx") || ctx.destination);
   src.start(t0);
   src.stop(t0 + dur);
   lfo.start(t0);
@@ -86,7 +86,7 @@ export function playDigitalGlitch() {
   const t0 = ctx.currentTime;
   const master = ctx.createGain();
   master.gain.value = 1;
-  master.connect(ctx.destination);
+  master.connect(busOut("sfx") || ctx.destination);
 
   const blips = [
     { f: 1880, at: 0.02, dur: 0.045, g: 0.028 },
@@ -156,7 +156,7 @@ export function playHullRumble() {
   const dur = 0.82;
   const master = ctx.createGain();
   master.gain.value = 1;
-  master.connect(ctx.destination);
+  master.connect(busOut("sfx") || ctx.destination);
 
   const thump = ctx.createOscillator();
   thump.type = "sine";
@@ -218,7 +218,7 @@ export function playGlassDenied() {
   const t0 = ctx.currentTime;
   const master = ctx.createGain();
   master.gain.value = 1;
-  master.connect(ctx.destination);
+  master.connect(busOut("sfx") || ctx.destination);
 
   const knock = ctx.createOscillator();
   knock.type = "sine";

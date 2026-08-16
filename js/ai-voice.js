@@ -4,7 +4,8 @@
  * (SpeechSynthesis has no Web Audio volume — boundaries are the simple sync).
  */
 
-import { playAlienTalk, stopAlienTalk } from "../sfx/alien-talk.js?v=20260815ez";
+import { playAlienTalk, stopAlienTalk } from "../sfx/alien-talk.js?v=20260816w";
+import { speechVolume } from "../sfx/ctx.js?v=20260817al";
 
 function normalizeLine(text) {
   return String(text || "")
@@ -194,7 +195,7 @@ export class AiVoice {
         const u = new SpeechSynthesisUtterance(text);
         u.pitch = this.pitch;
         u.rate = this.rate;
-        u.volume = 0.48;
+        u.volume = speechVolume();
         const voice = pickFemaleVoice();
         if (voice) u.voice = voice;
 
